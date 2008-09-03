@@ -1,17 +1,18 @@
-!     TODO:
+!     short plan:
 !     
-!     BY WEDNESDAY (Aug 27) DO:
-!         1) Fix up the normalization parameter in the collimated outflow case
+!    d..e 1) Fix up the normalization parameter in the collimated outflow case (see collim_cooef.py)
 !     
-!         2) Make injection time random (use the random distribution chris talks about)
+!    done 2) Make injection time random (model as a homogeneous poisson process)
 !     
-!         3) Have the random numbers come from an external file (See ./MPI for details)
+!    d..e 3) Have the random numbers come from an external file (See ../MPI/ for details)
 !     
-!         4) Find out why outflows aren't as predominant as in the cunningham paper
+!    ???? 4) Find out why outflows aren't as predominant as in the cunningham paper
 !
-!         5) !!!!!!----MPI----!!!! (See ./MPI for details)
+!    .... 5) !!!!!!----MPI----!!!! (See ../MPI/ for details)
 !
+!    done 6) Build in kinetic energy calculator (<K(t)>) (See ../MPI/ for details)
 !     
+!
 !     THEN:
 !         +START DOCUMENTING!!!
 !     
@@ -19,12 +20,14 @@
 !          
 !         +optimize OMP
 !     
+!    NOTE!!! this is the (mostly) **SERIAL** version... change repository to 
+!            isoth3d-mpi for parallel version
 
 
 PROGRAM isoth3d
 !SIMULATION PARAMS
 INCLUDE "omp_lib.h"
-INTEGER, PARAMETER :: n = 126, ghost=3
+INTEGER, PARAMETER :: n = 50, ghost=3
 REAL, PARAMETER :: CFL = 0.65
 INTEGER :: i0, nsteps=1, outputfreq=200, snapshotfreq=200
 INTEGER :: MAXSTEPS=0
@@ -54,12 +57,17 @@ cputime = 0.0
 
 !-----MAINLOOP-----
 t = 0; 
+dt = .15
 PRINT*,"ENTERING LOOP"
 PRINT*,""
 DO while(returnmsg .EQ. "")
   !!!!!!!!!!!!!!!!!!
   !Outflow Injection
-  DO WHILE(INT(t*S_norm) .GT. numinject .AND. (maxinject .EQ. 0 .OR. numinject .LT. maxinject))
+   DO WHILE( rand(0) .GT. exp(-1.0*S_norm*dt)*(S_norm*dt) .AND. &
+	(maxinject .EQ. 0 .OR. numinject .LE. maxinject))
+
+	print*, exp(-1.0*S_norm*dt)*(S_norm*dt)
+
     numinject = numinject + 1
 
     !ii = INT(rand(0)*(n-2*(r+ghost))+r+ghost)
@@ -77,9 +85,10 @@ DO while(returnmsg .EQ. "")
     10 FORMAT("Outflow #", I6.6," at (i,j,k) = (",I3.3,',',I3.3,',',I3.3, &
         ') with (Imp,r,d_inj,t) = (',F10.2,',',I3.3,',',F10.2,',',F10.5,')')
     PRINT 15, ci,cj,ck,softangle
-    15 FORMAT("    (ci,cj,ck, softangle) = (",F10.4,',',F10.4,',',F10.4,',',F10.2,')')
+    15 FORMAT("    (ci,cj,ck, softangle) = (", &
+        F10.4,',',F10.4,',',F10.4,',',F10.2,')')
         
-    call inject_outflow(n,ghost, ii,ij,ik, ci,cj,ck, Imp, r, d_inject, softangle)
+    call inject_outflow(n,ghost, ii,ij,ik, ci,cj,ck, Imp,r,d_inject,softangle)
   END DO
   
   !!!!!!!!!!!!!!!!!!
@@ -149,9 +158,9 @@ PRINT*,"dt_vz = ", (CFL/(maxval(1 + abs(u(:,:,:,4))/u(:,:,:,1))))
 PRINT*,"min(rho) = ", minval(u(:,:,:,1))
 PRINT*,"returnmsg = ", returnmsg
 PRINT*,""
-stop
+STOP
 
-contains 
+CONTAINS 
 
   !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
   SUBROUTINE boundary_periodic(u,n,ghost)
@@ -159,7 +168,8 @@ contains
     INTEGER :: n, ghost, a,b,c, inside
     REAL ::  u(n,n,n, 4)
     
-    !$omp parallel do schedule(static) shared(u,n,ghost) private(a,b,c) default(none)
+    !$omp parallel do schedule(static) shared(u,n,ghost) &
+    !$omp private(a,b,c) default(none)
     DO c=1,n
       DO b=1,n
         DO a=1,ghost
@@ -170,7 +180,8 @@ contains
       END DO
     END DO
     
-    !$omp parallel do schedule(static) shared(u,n,ghost) private(a,b,c) default(none)
+    !$omp parallel do schedule(static) shared(u,n,ghost) &
+    !$omp private(a,b,c) default(none)
     DO c=1,n
       DO a=1,ghost
         DO b=1,n
@@ -181,7 +192,8 @@ contains
       END DO
     END DO
     
-    !$omp parallel do schedule(static) shared(u,n,ghost) private(a,b,c) default(none)
+    !$omp parallel do schedule(static) shared(u,n,ghost) &
+    !$omp private(a,b,c) default(none)
     DO a=1,ghost 
       DO c=1,n
         DO b=1,n

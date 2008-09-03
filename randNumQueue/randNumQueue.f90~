@@ -1,0 +1,26 @@
+PROGRAM randNumQueue
+INCLUDE "omp_lib.h"
+INTEGER, PARAMETER :: MAX_QUEUE_SIZE = 1000, MIN_QUEUE_SIZE=50
+REAL, DIMENSION(MAX_QUEUE_SIZE) :: rand_queue
+INTEGER :: seek, node
+
+CONTAINS
+  SUBROUTINE init(filename, queue)
+    CHARACTER, LENGTH(64) :: filename
+    REAL, DIMENSION(MAX_QUEUE_SIZE) :: queue
+    
+
+  END SUBROUTINE init
+  
+  SUBROUTINE fill_queue(filename, queue, bottom,top)
+    INTEGER :: i, bottom, top
+    CHARACTER, LENGTH(64) :: filename
+    OPEN(UNIT=1, FILE=filename, ACCESS='READ')
+    DO i=bottom:top
+      READ(1,10) queue(i))
+      850 FORMAT(E15.6,' ',I10.10)
+    END DO
+    CLOSE(1)
+  END SUBROUTINE fill_queue
+   
+END PROGRAM randNumQueue

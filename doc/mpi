@@ -1,0 +1,27 @@
+Node 1 should be the outflow master.  Node0 will broadcast 500+ (think of good number based on network speed) to all nodes to sync a priority queue of numbers.  Every myrandom() call will pop a number off of the queue.  At the beginning of each iteration, if len(local_queue) < min_local_queue then a new broadcast is sent.
+
+
+
+start main loop:
+	if len(rand_queue) < MIN_RAND_QUEUE:
+		if nodeid == 0:
+			BROADCAST RAND NUMBERS
+			fill local queue with broadcasted numbers
+		else:
+			RECIEVE RAND NUMBERS
+			fill local queue with recieved numbers
+			
+			
+class myrandom:
+	def myrandom(self, maxqueue, minqueue):
+		self.queue = numpy.zeros((maxqueue))
+		self.maxqueue = maxqueue
+		self.minqueue = minqueue
+		
+	def __get__(self,b):
+	"""This is used to retrieve a random number"""
+		return [self.queue.pop(i) for i in range(b)]
+		
+	def __extend__(self, b):
+	"""This is used to add extra numbers to the queue"""
+		self.queue.extend(b)

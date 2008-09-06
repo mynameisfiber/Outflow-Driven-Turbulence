@@ -4,7 +4,6 @@ include "mpif.h"
 
 ! Variable Definitions:
 !     procs - number of processes
-!     globaln - global length
 !     n - length of local node
 !     ghost - number of ghost cells
 !     dims - # of nodes for each dimension
@@ -14,19 +13,25 @@ include "mpif.h"
 !     coords - origin of local grid in the global grid
 !     node - node ID in grid
 !     ierr - MPI error code
+!     randfile - filename with the random numbers
 
-integer, parameter :: procs = 27, n=16, globaln=(procs)**(1.0/3)*n, ghost=3
+integer, parameter :: procs = 8, n=16, ghost=3
 integer, DIMENSION(3) :: dims
 real, DIMENSION(n,n,n,4) :: u
 integer, DIMENSION(3) :: offset, coords
 integer :: node
 integer :: ierr
+character*64 :: randfile = "random.txt"
 
 !Check that all variables make sense
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
-  PRINT*,"# Procs must be a perfect cube"
+  PRINT *,"# Procs must be a perfect cube"
 END IF
-dims = globaln / n
+dims = (procs)**(1.0/3)
+
+!Now we open the random number file and set it to IO unit 1
+! note: read mode is default
+OPEN(UNIT=1, FILE=randfile)
 
 !Initialize MPI
 call MPI_INIT(ierr)
@@ -53,6 +58,7 @@ if (node .eq. 0) call output(u,n)
 
 
 call MPI_FINALIZE(ierr)
+CLOSE(1)
 return
 
 
@@ -131,4 +137,10 @@ CONTAINS
     END DO !i
     CLOSE(1)
   END SUBROUTINE output
+
+  REAL FUNCTION myrand()
+    READ(1,"(F12.10)") myrand
+    return
+  END FUNCTION myrand
+    
 end

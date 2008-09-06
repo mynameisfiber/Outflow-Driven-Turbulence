@@ -15,8 +15,8 @@ include "mpif.h"
 !     node - node ID in grid
 !     ierr - MPI error code
 
-integer, parameter :: procs = 8, n=16, globaln=(procs)**(1.0/3)*n, ghost=3
-integer, parameter, DIMENSION(3) :: dims = (/ 2,2,2 /) 
+integer, parameter :: procs = 27, n=16, globaln=(procs)**(1.0/3)*n, ghost=3
+integer, DIMENSION(3) :: dims
 real, DIMENSION(n,n,n,4) :: u
 integer, DIMENSION(3) :: offset, coords
 integer :: node
@@ -26,6 +26,7 @@ integer :: ierr
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
   PRINT*,"# Procs must be a perfect cube"
 END IF
+dims = globaln / n
 
 !Initialize MPI
 call MPI_INIT(ierr)

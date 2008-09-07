@@ -1,8 +1,16 @@
+ifeq ("`hostname`","mercury")
+	CC=mpif77.lam
+	RUN=mpirun.lam
+else
+	CC=mpif90
+	RUN=mpirun
+endif
+
 gridcontrol:
-	mpif90.openmpi -o gridcontrol gridcontrol.f90
+	${CC} -o gridcontrol gridcontrol.f90
 
 clean: 
-	rm -rf gridcontrol output-test
+	rm -rf gridcontrol output*-*
 
 run: gridcontrol
-	mpirun -np 27 gridcontrol
+	${RUN} -np 8 gridcontrol

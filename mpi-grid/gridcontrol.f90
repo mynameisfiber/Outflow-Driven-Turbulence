@@ -1,10 +1,12 @@
 program gridcontrol
+  
+implicit none
 include "mpif.h"
-
 
 ! Variable Definitions:
 !     procs - number of processes
 !     n - length of local node
+!     globaln - length of global grid
 !     ghost - number of ghost cells
 !     dims - # of nodes for each dimension
 !     u - test grid
@@ -14,20 +16,25 @@ include "mpif.h"
 !     node - node ID in grid
 !     ierr - MPI error code
 !     randfile - filename with the random numbers
-
+!     r - radius of outflow
+!     islocal - is true if a particular event is local to this node
 integer, parameter :: procs = 8, n=16, ghost=3
+real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 real, DIMENSION(n,n,n,4) :: u
 integer, DIMENSION(3) :: offset, coords
-integer :: node
-integer :: ierr
+integer :: node, globaln, isedge
+integer :: ierr, COMM_CART
 character*64 :: randfile = "random.txt"
+integer :: r = 4, oi,oj,ok, nstep=0
+logical :: islocal = .FALSE.
 
 !Check that all variables make sense
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
   PRINT *,"# Procs must be a perfect cube"
 END IF
-dims = (procs)**(1.0/3)
+globaln = (procs)**(1.0/3)*n
+dims = globaln/n
 
 !Now we open the random number file and set it to IO unit 1
 ! note: read mode is default
@@ -46,16 +53,35 @@ call MPI_CART_MAP(MPI_COMM_WORLD,3,dims,(/ .TRUE.,.TRUE.,.TRUE. /), &
 call MPI_CART_COORDS(COMM_CART,node,3,offset,ierr)
 coords = offset * n
 
+
 print*,"node=",node,"(x,y,z) = ",coords
 
 !Initialize the grid
 u = node
 
-!Now test out the boundry conditions
-call boundary(u,n,ghost,node)
+!MAIN LOOP
+do
+  if (node .eq. 0) print*,"nstep=",nstep
+  
+  !Find coordinates of the outflow
+  oi = ANINT(myrand()*(globaln-1)+1)
+  oj = ANINT(myrand()*(globaln-1)+1)
+  ok = ANINT(myrand()*(globaln-1)+1)
+  if (node .eq. 0) print*,"Creating outflow at: ",oi,oj,ok
+  
+  !Now we check if the outflow occures in the local grid
+  IF ( SQRT(SUM((coords - (/oi,oj,ok/) + n/2.0)**2)) - r .LE. sqrt2*n/2) THEN
+    islocal = .TRUE.
+    PRINT*,"Outflow is in node: ",node
+  END IF
+  
+  !Now test out the boundry conditions
+  call boundary(u,n,ghost,node)
 
-if (node .eq. 0) call output(u,n)
-
+  !Output
+  if (node .eq. 0) call output(u,n,nstep,node)
+  nstep = nstep + 1
+end do
 
 call MPI_FINALIZE(ierr)
 CLOSE(1)
@@ -78,19 +104,19 @@ CONTAINS
     
     count = n*n*ghost*4
     call MPI_Barrier (COMM_CART,ierr)
-    if (node .eq. 0)then
-      print*,"rd",rd
-      print*,"ru",ru
-      print*,"sds",sds
-      print*,"sde",sde
-      print*,"sus",sus
-      print*,"sue",sue
-      print*,"size(ru)",size(u(ru(1):n,ru(2):n,ru(3):n,:))
-      print*,"size(rd)",size(u(1:rd(1),1:rd(2),1:rd(3),:))
-      print*,"size(sd)",size(u(sds(1):sde(1),sds(2):sde(2),sds(3):sde(3),:))
-      print*,"size(su)",size(u(sus(1):sue(1),sus(2):sue(2),sus(3):sue(3),:))
-      print*,"count",count
-    end if
+    ! if (node .eq. 0)then
+    !   print*,"rd",rd
+    !   print*,"ru",ru
+    !   print*,"sds",sds
+    !   print*,"sde",sde
+    !   print*,"sus",sus
+    !   print*,"sue",sue
+    !   print*,"size(ru)",size(u(ru(1):n,ru(2):n,ru(3):n,:))
+    !   print*,"size(rd)",size(u(1:rd(1),1:rd(2),1:rd(3),:))
+    !   print*,"size(sd)",size(u(sds(1):sde(1),sds(2):sde(2),sds(3):sde(3),:))
+    !   print*,"size(su)",size(u(sus(1):sue(1),sus(2):sue(2),sus(3):sue(3),:))
+    !   print*,"count",count
+    ! end if
     DO dim=0,2
       !Find neighboors
       call MPI_Cart_shift (COMM_CART, dim, 1, &
@@ -99,14 +125,14 @@ CONTAINS
            nup, tmp, ierr)
                           
       !First we send to the down
-      print*,"D",node,"->",ndown
+      !print*,"D",node,"->",ndown
       call MPI_Sendrecv(u(sds(1):sde(1),sds(2):sde(2),sds(3):sde(3),:), count,&
                         MPI_REAL, ndown, node, u(ru(1):n,ru(2):n,ru(3):n,:), &
                         count, MPI_REAL, nup, nup, COMM_CART, &
                         MPI_STATUS_IGNORE, ierr)
       
       !Now we send to the up
-      print*,"U",node,"->",nup
+      !print*,"U",node,"->",nup
       call MPI_Sendrecv(u(sus(1):sue(1),sus(2):sue(2),sus(3):sue(3),:), count,&
                         MPI_REAL, nup, node, u(1:rd(1),1:rd(2),1:rd(3),:), &
                         count, MPI_REAL, ndown,ndown,COMM_CART, &
@@ -121,25 +147,37 @@ CONTAINS
     END DO
   END SUBROUTINE boundary
   
-  SUBROUTINE output(u,n)
-    integer :: n
+  SUBROUTINE output(u,n,nstep,node)
+    integer :: n,nstep,node,i,j,k
+    CHARACTER*128 filename
     real, dimension(n,n,n,4) :: u
     
-    OPEN(UNIT=1, FILE="output-test")
+    !Create the filename
+    WRITE(filename,800) nstep, node
+    800 format('output',I8.8,'-',I3.3)
+    OPEN(UNIT=2, FILE=TRIM(filename))
+    print*,"Writing to: ",filename,"@ nstep=",nstep
     DO i = 1,n
       DO j = 1,n
         DO k = 1, n
-          write(1,900) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
+          write(2,900) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
           900 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
                !i,j,k, rho, rho vx, rho vy, rho vz. 
         END DO !k
       END DO !j
     END DO !i
-    CLOSE(1)
+    CLOSE(2)
   END SUBROUTINE output
 
   REAL FUNCTION myrand()
-    READ(1,"(F12.10)") myrand
+    INTEGER :: stat
+    READ(1,"(F12.10)", IOSTAT=stat) myrand
+    IF (stat .ne. 0) THEN
+      PRINT*,"An error occured while reading the random file:"
+      IF (stat .lt. 0) PRINT*,"  End of file"
+      IF (stat .gt. 0) PRINT*,"  Undetermined"
+      STOP
+    END IF
     return
   END FUNCTION myrand
     

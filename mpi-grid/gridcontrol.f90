@@ -18,12 +18,13 @@ include "mpif.h"
 !     randfile - filename with the random numbers
 !     r - radius of outflow
 !     islocal - is true if a particular event is local to this node
+!     isedge - +1 for top edge, -1 for bottom edge
 integer, parameter :: procs = 8, n=16, ghost=3
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 real, DIMENSION(n,n,n,4) :: u
-integer, DIMENSION(3) :: offset, coords
-integer :: node, globaln, isedge
+integer, DIMENSION(3) :: offset, coords, isedge
+integer :: node, globaln
 integer :: ierr, COMM_CART
 character*64 :: randfile = "random.txt"
 integer :: r = 4, oi,oj,ok, nstep=0
@@ -52,9 +53,10 @@ call MPI_CART_MAP(MPI_COMM_WORLD,3,dims,(/ .TRUE.,.TRUE.,.TRUE. /), &
 !Collects the local coordinates in node space and calculates the offset
 call MPI_CART_COORDS(COMM_CART,node,3,offset,ierr)
 coords = offset * n
+isedge = INT(2*coords/(globaln-n)-1)
 
 
-print*,"node=",node,"(x,y,z) = ",coords
+print*,"node=",node,"(x,y,z) = ",coords,"isedge = ",isedge
 
 !Initialize the grid
 u = node
@@ -67,13 +69,36 @@ do
   oi = ANINT(myrand()*(globaln-1)+1)
   oj = ANINT(myrand()*(globaln-1)+1)
   ok = ANINT(myrand()*(globaln-1)+1)
-  if (node .eq. 0) print*,"Creating outflow at: ",oi,oj,ok
   
-  !Now we check if the outflow occures in the local grid
-  IF ( SQRT(SUM((coords - (/oi,oj,ok/) + n/2.0)**2)) - r .LE. sqrt2*n/2) THEN
+  
+  if (node .eq. 0) print*,"Creating outflow at: ",oi,oj,ok
+  !Now we check if the outflow occures in the local grid.  This is done by finding
+  !   the distance between the outflow and the center of the local grid.  If the
+  !   local grid is an edge, then the outflow is repositioned to account for
+  !   periodicity.  This replacement is done 4 times for each possible placement.
+  islocal = .FALSE.
+  !inside node:
+  IF (SQRT(SUM((coords - (/oi,oj,ok/) + n/2.0)**2))-r .LE. sqrt2*(n+.5)/2) THEN
     islocal = .TRUE.
-    PRINT*,"Outflow is in node: ",node
+  !corner periodicity:
+  ELSE IF (ANY(isedge .ne. 0) .AND. SQRT(SUM((coords - (/oi,oj,ok/) - &
+      isedge*globaln + n/2.0)**2)) - r .LE. sqrt2*(n+.5)/2) THEN
+    islocal = .TRUE.
+  !i periodicity
+  ELSE IF (isedge(1) .ne. 0 .AND. SQRT(SUM((coords - &
+     (/oi+isedge(1)*globaln,oj,ok/) + n/2.0)**2)) - r .LE. sqrt2*(n+.5)/2) THEN
+    islocal = .TRUE.
+  !j periodicity
+  ELSE IF (isedge(2) .ne. 0 .AND. SQRT(SUM((coords - &
+     (/oi,oj+isedge(2)*globaln,ok/) + n/2.0)**2)) - r .LE. sqrt2*(n+.5)/2) THEN
+    islocal = .TRUE.
+  !k periodicity
+  ELSE IF (isedge(3) .ne. 0 .AND. SQRT(SUM((coords - &
+     (/oi,oj,ok+isedge(3)*globaln/) + n/2.0)**2)) - r .LE. sqrt2*(n+.5)/2) THEN
+    islocal = .TRUE.
   END IF
+  IF (islocal) PRINT*,"Outflow is in node:",node
+  
   
   !Now test out the boundry conditions
   call boundary(u,n,ghost,node)
@@ -83,7 +108,7 @@ do
   nstep = nstep + 1
 end do
 
-call MPI_FINALIZE(ierr)
+666 call MPI_FINALIZE(ierr)
 CLOSE(1)
 return
 
@@ -95,6 +120,13 @@ CONTAINS
     integer, dimension(3) :: sds, sde, sus, sue, rd, ru
     real, DIMENSION(n,n,n,4) :: u
     
+    !Set up the boundries to be sent.  The variables are defined as:
+    !     rd - end of boundry to be recieved from downstream
+    !     ru - end of boundry to be recieved from upstream
+    !     sds - start of boundry to be sent downstream
+    !     sde - end of boundry to be sent downstream
+    !     sus - start of boundry to be sent upstream
+    !     sue - end of boundry to be sent upstream
     rd = (/ ghost, n, n /)
     ru = n-rd+1
     sds = (/ ghost+1, 1, 1 /)
@@ -137,7 +169,8 @@ CONTAINS
                         MPI_REAL, nup, node, u(1:rd(1),1:rd(2),1:rd(3),:), &
                         count, MPI_REAL, ndown,ndown,COMM_CART, &
                         MPI_STATUS_IGNORE,ierr)
-                        
+                       
+      !Adjust boundries to be sent for next iteration 
       rd = cshift(rd,1)
       ru = cshift(ru,1)
       sds = cshift(sds,1)
@@ -154,7 +187,7 @@ CONTAINS
     
     !Create the filename
     WRITE(filename,800) nstep, node
-    800 format('output',I8.8,'-',I3.3)
+    800 format('output-',I8.8,'-',I3.3)
     OPEN(UNIT=2, FILE=TRIM(filename))
     print*,"Writing to: ",filename,"@ nstep=",nstep
     DO i = 1,n

@@ -70,31 +70,14 @@ do
   oj = ANINT(myrand()*(globaln-1)+1)
   ok = ANINT(myrand()*(globaln-1)+1)
   
-  
   if (node .eq. 0) print*,"Creating outflow at: ",oi,oj,ok
-  !Now we check if the outflow occures in the local grid.  This is done by finding
-  !   the distance between the outflow and the center of the local grid.  If the
-  !   local grid is an edge, then the outflow is repositioned to account for
-  !   periodicity.  This replacement is done 4 times for each possible placement.
+  !Now we check if the outflow occures in the local grid.  This is done by
+  !   finding the minimum distance between the center of the grid and the
+  !   outflow (using isedge to relocate the outflow based on periodicity)
   islocal = .FALSE.
-  !inside node:
-  IF (SQRT(SUM((coords - (/oi,oj,ok/) + n/2.0)**2))-r .LE. sqrt2*(n+.5)/2) THEN
-    islocal = .TRUE.
-  !corner periodicity:
-  ELSE IF (ANY(isedge .ne. 0) .AND. SQRT(SUM((coords - (/oi,oj,ok/) - &
-      isedge*globaln + n/2.0)**2)) - r .LE. sqrt2*(n+.5)/2) THEN
-    islocal = .TRUE.
-  !i periodicity
-  ELSE IF (isedge(1) .ne. 0 .AND. SQRT(SUM((coords - &
-     (/oi+isedge(1)*globaln,oj,ok/) + n/2.0)**2)) - r .LE. sqrt2*(n+.5)/2) THEN
-    islocal = .TRUE.
-  !j periodicity
-  ELSE IF (isedge(2) .ne. 0 .AND. SQRT(SUM((coords - &
-     (/oi,oj+isedge(2)*globaln,ok/) + n/2.0)**2)) - r .LE. sqrt2*(n+.5)/2) THEN
-    islocal = .TRUE.
-  !k periodicity
-  ELSE IF (isedge(3) .ne. 0 .AND. SQRT(SUM((coords - &
-     (/oi,oj,ok+isedge(3)*globaln/) + n/2.0)**2)) - r .LE. sqrt2*(n+.5)/2) THEN
+  IF ( SQRT( SUM( MIN( ABS(coords-(/oi,oj,ok/)+n/2.0), &
+      ABS(coords-((/oi,oj,ok/)+isedge*globaln)+n/2.0) )**2 ) ) -r .lt. &
+      sqrt2*(n-.5)/2) THEN
     islocal = .TRUE.
   END IF
   IF (islocal) PRINT*,"Outflow is in node:",node

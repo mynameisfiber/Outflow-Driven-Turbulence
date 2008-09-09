@@ -2,6 +2,7 @@ program gridcontrol
   
 implicit none
 include "mpif.h"
+include "omp_lib.h"
 
 ! Variable Definitions:
 !     procs - number of processes
@@ -20,6 +21,7 @@ include "mpif.h"
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
 integer, parameter :: procs = 8, n=16, ghost=3
+integer, parameter :: MAXTIME = 0.0, MAXSTEP = 1
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 real, DIMENSION(n,n,n,4) :: u
@@ -62,7 +64,7 @@ OPEN(UNIT=1, FILE=randfile)
 !Initialize the grid
 CALL setup(u,n)
 
-do
+do while (MAXSTEP .ne. 0 .OR. nstep .LE. MAXSTEP)
   if (node .eq. 0) print*,"nstep=",nstep
   
   !Manage outflows

@@ -1,10 +1,10 @@
-ifeq ("`hostname`","mercury")
+#ifeq ($HOSTNAME,"mercury")
 	CC=mpif77.lam
 	RUN=mpirun.lam
-else
-	CC=mpif90
-	RUN=mpirun
-endif
+#else
+#	CC=mpif90
+#	RUN=mpirun
+#endif
 
 gridcontrol:
 	${CC} -o gridcontrol gridcontrol.f90

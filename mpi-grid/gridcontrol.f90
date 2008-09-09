@@ -16,7 +16,7 @@ include "mpif.h"
 !     node - node ID in grid
 !     ierr - MPI error code
 !     randfile - filename with the random numbers
-!     r - radius of outflow
+!     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
 integer, parameter :: procs = 8, n=16, ghost=3
@@ -27,8 +27,8 @@ integer, DIMENSION(3) :: offset, coords, isedge
 integer :: node, globaln
 integer :: ierr, COMM_CART
 character*64 :: randfile = "random.txt"
-integer :: r = 4, oi,oj,ok, nstep=0
-logical :: islocal = .FALSE.
+integer :: nstep=0, or = 4
+
 
 !Check that all variables make sense
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
@@ -37,9 +37,6 @@ END IF
 globaln = (procs)**(1.0/3)*n
 dims = globaln/n
 
-!Now we open the random number file and set it to IO unit 1
-! note: read mode is default
-OPEN(UNIT=1, FILE=randfile)
 
 !Initialize MPI
 call MPI_INIT(ierr)
@@ -54,41 +51,30 @@ call MPI_CART_MAP(MPI_COMM_WORLD,3,dims,(/ .TRUE.,.TRUE.,.TRUE. /), &
 call MPI_CART_COORDS(COMM_CART,node,3,offset,ierr)
 coords = offset * n
 isedge = INT(2*coords/(globaln-n)-1)
-
-
 print*,"node=",node,"(x,y,z) = ",coords,"isedge = ",isedge
 
-!Initialize the grid
-u = node
 
-!MAIN LOOP
+!Now we open the random number file and set it to IO unit 1
+! note: read mode is default
+OPEN(UNIT=1, FILE=randfile)
+
+
+!Initialize the grid
+CALL setup(u,n)
+
 do
   if (node .eq. 0) print*,"nstep=",nstep
   
-  !Find coordinates of the outflow
-  oi = ANINT(myrand()*(globaln-1)+1)
-  oj = ANINT(myrand()*(globaln-1)+1)
-  ok = ANINT(myrand()*(globaln-1)+1)
-  
-  if (node .eq. 0) print*,"Creating outflow at: ",oi,oj,ok
-  !Now we check if the outflow occures in the local grid.  This is done by
-  !   finding the minimum distance between the center of the grid and the
-  !   outflow (using isedge to relocate the outflow based on periodicity)
-  islocal = .FALSE.
-  IF ( SQRT( SUM( MIN( ABS(coords-(/oi,oj,ok/)+n/2.0), &
-      ABS(coords-((/oi,oj,ok/)+isedge*globaln)+n/2.0) )**2 ) ) -r .lt. &
-      sqrt2*(n-.5)/2) THEN
-    islocal = .TRUE.
-  END IF
-  IF (islocal) PRINT*,"Outflow is in node:",node
-  
+  !Manage outflows
+  CALL outflow_manager(u,n)
   
   !Now test out the boundry conditions
-  call boundary(u,n,ghost,node)
+  call boundary(u,n,ghost)
 
   !Output
-  if (node .eq. 0) call output(u,n,nstep,node)
+  if (node .eq. 0) call output(u,n,nstep)
   nstep = nstep + 1
+  GOTO 666
 end do
 
 666 call MPI_FINALIZE(ierr)
@@ -98,8 +84,67 @@ return
 
 CONTAINS
 
-  SUBROUTINE boundary(u,n,ghost,node)
-    integer :: n, node, ghost, dim, ndown, nup, count, ierr, tmp
+  SUBROUTINE outflow_manager(u,n)
+    INTEGER :: n, oi,oj,ok
+    REAL, DIMENSION(n,n,n,4) :: u
+    
+    !Find coordinates of the outflow
+    oi = ANINT(myrand()*(globaln-1)+1)
+    oj = ANINT(myrand()*(globaln-1)+1)
+    ok = ANINT(myrand()*(globaln-1)+1)
+    
+    if (node .eq. 0) print*,"Creating outflow at: ",oi,oj,ok
+    !Now we check if the outflow occures in the local grid.  This is done by
+    !   finding the components of the distance at the closest approach and seeing
+    !   if any component is larger than the local grid width
+    !NOTE: we could do a more direct checking my finding the distance at closest
+    !   approach to avoid false-positive however it would add computational time.
+    IF (MAXVAL(MIN(ABS(coords-(/oi,oj,ok/)+n/2.0), &
+        ABS(coords-((/oi,oj,ok/)+isedge*globaln)+n/2.0)))-or &
+        .LT. n/2) THEN
+      CALL generate_outflow(u,n,oi,oj,ok)
+      PRINT*,"Outflow is in node:",node
+    END IF
+    
+  END SUBROUTINE outflow_manager
+
+  SUBROUTINE generate_outflow(u,n,oi,oj,ok)
+    !The following variables are defined:
+    !     oi/oj/ok - global coordinates of injection site's origin
+    !     ni/nj/nk - local coordinate of arbitrary point of outflow
+    !     x - distance between arbitrary point and center of outflow
+    INTEGER :: n,oi,oj,ok, i,j,k, ni,nj,nk
+    REAL, DIMENSION(n,n,n,4) :: u
+    REAL :: r
+    
+    !$OMP PARALLEL DO SCHEDULE(STATIC) &
+    !$OMP shared(globaln,oi,oj,ok,r,u) PRIVATE(i,j,k) DEFAULT(none)
+    DO k=ok-r,ok+r
+      DO j=oj-r,oj+r
+        DO i=oi-r,oi+r
+          r = ((i-oi)**2 + (j-oj)**2 + (k-ok)**2)**.5
+          IF (r .LT. or) THEN
+          
+            !First we normalize to coordinates to the grid as to wrap any
+            !   outflows around the periodic grid
+            ni = MOD(i,globaln); nj = MOD(j,globaln); nk = MOD(k,globaln)
+            IF( MAXVAL(ABS(coords+n/2-(/ni,nj,nk/))) .GT. n/2 ) THEN
+              
+              
+              !NOW CHECK IF ni/nj/nk IS IN THE LOCAL GRID!
+            
+              !Now we inject the outflow into the local grid
+             END IF
+          END IF
+        END DO
+      END DO
+    END DO
+    
+  
+  END SUBROUTINE generate_outflow
+
+  SUBROUTINE boundary(u,n,ghost)
+    integer :: n, ghost, dim, ndown, nup, count, ierr, tmp
     integer, dimension(3) :: sds, sde, sus, sue, rd, ru
     real, DIMENSION(n,n,n,4) :: u
     
@@ -163,8 +208,8 @@ CONTAINS
     END DO
   END SUBROUTINE boundary
   
-  SUBROUTINE output(u,n,nstep,node)
-    integer :: n,nstep,node,i,j,k
+  SUBROUTINE output(u,n,nstep)
+    integer :: n,nstep,i,j,k
     CHARACTER*128 filename
     real, dimension(n,n,n,4) :: u
     
@@ -184,6 +229,19 @@ CONTAINS
     END DO !i
     CLOSE(2)
   END SUBROUTINE output
+  
+  SUBROUTINE setup(u,n)
+    INTEGER :: n
+    REAL, DIMENSION(n,n,n,4) :: u
+    
+    !Constant uniform initial density
+    u(:,:,:,1) = 1
+    
+    !Zero velocity field
+    u(:,:,:,2) = 0
+    u(:,:,:,3) = 0
+    u(:,:,:,4) = 0
+  END SUBROUTINE setup
 
   REAL FUNCTION myrand()
     INTEGER :: stat

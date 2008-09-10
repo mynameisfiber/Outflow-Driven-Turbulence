@@ -1,0 +1,519 @@
+program gridcontrol
+  
+implicit none
+include "mpif.h"
+include "omp_lib.h"
+
+! Variable Definitions:
+!     procs - number of processes
+!     n - length of local node
+!     globaln - length of global grid
+!     ghost - number of ghost cells
+!     CFL - courant number
+!     outputfreq - frequency of stdout dumps
+!     snapshotfreq - frequency of file dumps
+!     dims - # of nodes for each dimension
+!     u - test grid
+!     ghost - number of ghost zones
+!     offset - coordinate in node space
+!     coords - origin of local grid in the global grid
+!     node - node ID in grid
+!     ierr - MPI error code
+!     randfile - filename with the random numbers
+!     or - radius of outflow
+!     islocal - is true if a particular event is local to this node
+!     isedge - +1 for top edge, -1 for bottom edge
+integer, parameter :: procs = 8, n=32, ghost=3
+REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
+integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 20, MAXINJECT=1
+integer, parameter :: outputfreq=2, snapshotfreq=5
+real, parameter :: sqrt2=sqrt(2.0)
+integer, DIMENSION(3) :: dims
+REAL :: dt, t
+real, DIMENSION(n,n,n,4) :: u
+integer, DIMENSION(3) :: offset, coords, isedge
+integer :: node, globaln
+integer :: ierr, COMM_CART
+character*64 :: randfile = "random.txt", returnmsg = ""
+REAL(8) :: cputimeoffset, cputime, tcputime
+integer :: nstep=1, numinject = 1
+REAL, PARAMETER :: oImp=15012.6, oSnorm=2.91e-4*n**3, odinj=0.05, osoft=0.0 
+INTEGER, PARAMETER :: or = 4
+
+!Check that variables make sense
+IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
+  returnmsg = "# Procs must be a perfect cube"
+  GOTO 666
+END IF
+globaln = (procs)**(1.0/3)*n
+dims = globaln/n
+
+
+!Initialize MPI
+call MPI_INIT(ierr)
+cputimeoffset = MPI_Wtime()
+cputime = 0
+
+!Create the cartesian grid and find the local ID in it
+call MPI_CART_CREATE(MPI_COMM_WORLD,3,dims,(/ .TRUE.,.TRUE.,.TRUE. /), &
+     .FALSE.,COMM_CART,ierr)
+call MPI_CART_MAP(MPI_COMM_WORLD,3,dims,(/ .TRUE.,.TRUE.,.TRUE. /), &
+     node,ierr)
+
+!Collects the local coordinates in node space and calculates the offset
+call MPI_CART_COORDS(COMM_CART,node,3,offset,ierr)
+coords = offset * n
+isedge = INT(2*coords/(globaln-n)-1)
+print*,"node=",node,"(x,y,z) = ",coords
+
+
+!Now we open the random number file and set it to IO unit 1
+! note: read mode is default
+OPEN(UNIT=1, FILE=randfile)
+
+
+!Initialization
+CALL setup(u,n)
+CALL timestep(dt, u,n,CFL)
+IF (snapshotfreq .NE. 0) CALL output_file(u,n,0.0,0)
+t=0.0; dt=0.15
+
+do while (returnmsg .eq. "")
+  if (node .eq. 0) print*,"nstep=",nstep
+  
+  !Manage outflows
+  CALL outflow_manager(u,n,dt,numinject)
+  
+  !Now test out the boundry conditions
+  call boundary(u,n,ghost)
+
+  !Calculate timestep
+  CALL timestep(dt, u,n,CFL)
+  t = t+2*dt;
+  
+  !Strang splitting of operators
+  CALL doX(u,n,dt); 
+   CALL doY(u,n,dt); 
+    CALL doZ(u,n,dt); 
+    CALL doZ(u,n,dt); 
+   CALL doY(u,n,dt); 
+  CALL doX(u,n,dt);
+
+  !update time
+  cputime = MPI_Wtime() - cputimeoffset
+
+  !Output
+  if (SNAPSHOTFREQ .NE. 0 .AND. MOD(nstep, SNAPSHOTFREQ) .EQ. 0) &
+      call output_file(u,n,t,nstep)
+  if (OUTPUTFREQ .NE. 0 .AND. MOD(nstep, OUTPUTFREQ) .EQ. 0) &
+      CALL output_stdout(nstep,cputime,numinject,t,dt,minval(u(:,:,:,1)))
+
+  !Check if it's time to leave
+  IF (MAXTIME .NE. 0 .AND. MAXTIME .LE. cputime) THEN 
+    returnmsg = "System Time Limit"
+  ELSE IF (MAXSTEPS .NE. 0 .AND. MAXSTEPS .LE. nstep) THEN 
+    returnmsg = "Timestep Limit"
+  ELSE IF (minval(u(:,:,:,1)) .LT. 0) THEN
+    returnmsg = "Negative Density"
+  END IF
+      
+  nstep = nstep + 1
+end do
+
+666 PRINT*,"Quiting: ",returnmsg
+if (node .eq. 0) then
+  CALL CPU_TIME(tcputime)
+  PRINT*,"Average Walltime per CPU:",cputime/procs
+  PRINT*,"Total runtime: ", tcputime
+  PRINT*,"Efficency: ", 100*cputime/(procs*tcputime), "%"
+end if
+call MPI_FINALIZE(ierr)
+CLOSE(1)
+return
+
+
+CONTAINS
+
+  SUBROUTINE outflow_manager(u,n,dt,numinject)
+    INTEGER :: n, oi,oj,ok, numinject
+    REAL, DIMENSION(n,n,n,4) :: u
+    REAL :: dt, ci,cj,ck
+    
+    DO WHILE( myrand() .GT. exp(-1.0*oSnorm*dt)*(oSnorm*dt) .AND. &
+  	(MAXINJECT .EQ. 0 .OR. numinject .LE. MAXINJECT))
+    
+      !Find coordinates of the outflow
+      oi = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
+      oj = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
+      ok = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
+      
+      !Create random orientation
+      if (osoft .NE. 0.0) then
+        ci = myrand()*2-1
+        cj = myrand()*2-1
+        ck = myrand()*2-1
+      end if
+    
+      if (node .eq. 0) print*,"Creating outflow at: ",oi,oj,ok
+      !Now we check if the outflow occures in the local grid.  This is done by
+      !   finding the components of the distance at the closest approach and 
+      !   seeing if any component is larger than the local grid width
+      !NOTE: we could do a more direct checking my finding the distance at 
+      !   closest approach to avoid false-positive however it would add 
+      !   computational time.
+      IF (MAXVAL(MIN(ABS(coords-(/oi,oj,ok/)-2*offset*ghost+n/2.0), &
+          ABS(coords-((/oi,oj,ok/)-2*offset*ghost+isedge*globaln)+n/2.0)))-or &
+          .LT. n/2) THEN
+        CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
+      END IF
+      
+      numinject = numinject + 1
+    END DO
+  END SUBROUTINE outflow_manager
+
+  SUBROUTINE generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
+    !The following variables are defined:
+    !     oi/oj/ok - global coordinates of injection site's origin
+    !     ci/cj/ck - position of the orientation pole
+    !     ni/nj/nk - local coordinate of arbitrary point of outflow
+    !     x - distance between arbitrary point and center of outflow
+    INTEGER :: n,oi,oj,ok, i,j,k, ni,nj,nk
+    REAL, DIMENSION(n,n,n,4) :: u
+    REAL :: r, ci,cj,ck, V, mu, collen, P, colnorm
+    
+    V = (4.0 * PI / 3.0) * or**3
+    collen = (ci**2 + cj**2 + ck**2)**.5
+    colnorm = .005
+    
+    !$OMP PARALLEL DO SCHEDULE(STATIC) &
+    !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n) &
+    !$OMP PRIVATE(i,j,k,r,ni,nj,nk,P,mu) DEFAULT(none)
+    DO k=ok-or,ok+or
+      DO j=oj-or,oj+or
+        DO i=oi-or,oi+or
+          r = ((i-oi)**2 + (j-oj)**2 + (k-ok)**2)**.5
+          IF (r .LT. or .AND. r .NE. 0) THEN
+          
+            !First we normalize to coordinates to the grid as to wrap any
+            !   outflows around the periodic grid
+            ni = MOD(i,globaln)-coords(1)
+            nj = MOD(j,globaln)-coords(2)
+            nk = MOD(k,globaln)-coords(3)
+            !Now we check if the given coordinate is inside this grid
+            IF (MAXVAL((/ni,nj,nk/)) .LE. n-ghost .AND. &
+                MINVAL((/ni,nj,nk/)) .GT. ghost) THEN
+          
+              !Take care of collimation
+              IF (osoft .GT. 0) THEN
+                mu = ACOS( DOT_PRODUCT((/ i-oi,j-oj,k-ok /),(/ ci,cj,ck /)) &
+                     / (r*collen) ) * 2.0 / PI - 1
+                P = colnorm / (1 + osoft**2 - mu**2)
+              ELSE
+                P = 1.0
+              END IF
+              
+              !Mass injection
+              u(ni,nj,nk,1) = u(ni,nj,nk,1) + (or-r)*odinj
+              
+              !Inject correct momentum per unit volume
+              u(ni,nj,nk,2) = u(ni,nj,nk,2) + P*oImp/V * (i-oi)/r
+              u(ni,nj,nk,3) = u(ni,nj,nk,3) + P*oImp/V * (j-oj)/r
+              u(ni,nj,nk,4) = u(ni,nj,nk,4) + P*oImp/V * (k-ok)/r
+            END IF
+          END IF
+        END DO
+      END DO
+    END DO
+    
+  
+  END SUBROUTINE generate_outflow
+
+  SUBROUTINE boundary(u,n,ghost)
+    integer :: n, ghost, dim, ndown, nup, count, ierr, tmp
+    integer, dimension(3) :: sds, sde, sus, sue, rd, ru
+    real, DIMENSION(n,n,n,4) :: u
+    
+    !Set up the boundries to be sent.  The variables are defined as:
+    !     rd - end of boundry to be recieved from downstream
+    !     ru - end of boundry to be recieved from upstream
+    !     sds - start of boundry to be sent downstream
+    !     sde - end of boundry to be sent downstream
+    !     sus - start of boundry to be sent upstream
+    !     sue - end of boundry to be sent upstream
+    rd = (/ ghost, n, n /)
+    ru = n-rd+1
+    sds = (/ ghost+1, 1, 1 /)
+    sde = (/ 2*ghost, n, n/)
+    sus = n - sde + 1
+    sue = n - sds + 1
+    
+    count = n*n*ghost*4
+    call MPI_Barrier (COMM_CART,ierr)
+    DO dim=0,2
+      !Find neighboors
+      call MPI_Cart_shift (COMM_CART, dim, 1, &
+           ndown, tmp, ierr)
+      call MPI_Cart_shift (COMM_CART, dim, -1, &
+           nup, tmp, ierr)
+                          
+      !First we send to the down
+      !print*,"D",node,"->",ndown
+      call MPI_Sendrecv(u(sds(1):sde(1),sds(2):sde(2),sds(3):sde(3),:), count,&
+                        MPI_REAL, ndown, node, u(ru(1):n,ru(2):n,ru(3):n,:), &
+                        count, MPI_REAL, nup, nup, COMM_CART, &
+                        MPI_STATUS_IGNORE, ierr)
+      
+      !Now we send to the up
+      !print*,"U",node,"->",nup
+      call MPI_Sendrecv(u(sus(1):sue(1),sus(2):sue(2),sus(3):sue(3),:), count,&
+                        MPI_REAL, nup, node, u(1:rd(1),1:rd(2),1:rd(3),:), &
+                        count, MPI_REAL, ndown,ndown,COMM_CART, &
+                        MPI_STATUS_IGNORE,ierr)
+                       
+      !Adjust boundries to be sent for next iteration 
+      rd = cshift(rd,1)
+      ru = cshift(ru,1)
+      sds = cshift(sds,1)
+      sde = cshift(sde,1)
+      sus = cshift(sus,1)
+      sue = cshift(sue,1)
+    END DO
+  END SUBROUTINE boundary
+  
+  
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  RECURSIVE SUBROUTINE timestep(dt, u,n,CFL)! result(dt)
+    IMPLICIT NONE
+    INTEGER :: n
+    REAL, PARAMETER :: cs=1
+    REAL ::  CFL, ldt,dt, u(n,n,n, 4)
+    REAL, DIMENSION(n,n,n) :: rho, rhovx, rhovy, rhovz
+    !REAL :: rho(n,n,n), rhovx(n,n,n), rhovy(n,n,n), &
+    !   rhovz(n,n,n), e(n,n,n), p(n,n,n), cs(n,n,n)
+    rho   = u(:,:,:, 1);
+    rhovx = u(:,:,:, 2); 
+    rhovy = u(:,:,:, 3);            
+    rhovz = u(:,:,:, 4); 
+    dt = CFL/(maxval(cs + max(abs(rhovx), abs(rhovy), abs(rhovz))/rho) )
+    call MPI_Allreduce (ldt, dt, 1, MPI_REAL, MPI_MIN, COMM_CART, ierr )
+    
+  END SUBROUTINE timestep
+  
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  RECURSIVE SUBROUTINE doX(u,n,dt)
+    IMPLICIT NONE
+    INTEGER :: n, j, k
+    INTEGER, DIMENSION(4) :: reorder = (/1, 2, 3, 4/) 
+    REAL u(:,:,:, :); 
+    REAL :: dt
+    REAL, DIMENSION(n,n, 4) :: u2d
+    REAL, DIMENSION(n, 4) :: u1d
+    ! X-operation -- i of (i,j,k). 
+    !$omp parallel do private(u2d, u1d, k) shared(u,n,dt, reorder) default(none) schedule(dynamic)
+    DO j = 1, n
+    u2d = u(:,j,:, :); ! pick out xz planes 
+      DO k = 1, n
+       u1d = u2d(:,k, reorder ) ! pick out x lines from xz planes
+       CALL tvdeuler(u1d, n, dt)
+       u2d(:,k, reorder ) = u1d;     
+      END DO !k
+      u(:,j,:, :) = u2d;     
+    END DO !j 
+  END SUBROUTINE doX
+  
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  RECURSIVE SUBROUTINE doY(u,n,dt)
+    IMPLICIT NONE
+    INTEGER :: n, j, k
+    INTEGER, DIMENSION(4) :: reorder = (/1, 3, 2, 4/) !switch vy&vx
+    REAL u(:,:,:, :); 
+    REAL :: dt
+    REAL, DIMENSION(n,n, 4) :: u2d
+    REAL, DIMENSION(n, 4) :: u1d
+    ! Y-operation -- j of (i,j,k). 
+    !$omp parallel do private(u2d, u1d, k) shared(u,n,dt,reorder) default(none) schedule(dynamic)
+    DO j = 1, n
+      u2d = u(j,:,:, : ); ! pick out yz planes
+      DO k = 1, n
+       u1d = u2d(:,k, reorder ) ! pick out y lines from yz plane
+       CALL tvdeuler(u1d, n, dt)
+       u2d(:,k, reorder ) = u1d;     
+      END DO !k
+      u(j,:,:, :) = u2d;     
+    END DO !j 
+  END SUBROUTINE doY
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  RECURSIVE SUBROUTINE doZ(u,n,dt)
+    IMPLICIT NONE
+    INTEGER :: n, j, k
+    INTEGER, DIMENSION(4) :: reorder = (/1, 4, 3, 2 /) !switch vz&vx
+    REAL u(:,:,:, :); 
+    REAL :: dt
+    REAL, DIMENSION(n,n, 4) :: u2d
+    REAL, DIMENSION(n, 4) :: u1d
+    ! Z-operation -- k of (i,j,k). 
+    !$omp parallel do private(u2d, u1d, k) shared(u,n,dt,reorder) default(none) schedule(dynamic)
+    DO j = 1, n
+      u2d = u(j,:,:, : ); ! pick out yz planes
+      DO k = 1, n
+       u1d = u2d(k,:, reorder ) ! pick out z lines from yz planes
+       CALL tvdeuler(u1d, n, dt)
+       u2d(k,:, reorder ) = u1d;     
+      END DO !k
+      u(j,:,:, :) = u2d;     
+    END DO !j 
+  END SUBROUTINE doZ
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  RECURSIVE SUBROUTINE tvdeuler(u,n,dt) 
+    IMPLICIT NONE
+    INTEGER :: n, k, i
+    REAL, PARAMETER :: csound = 1
+    REAL :: dt
+    REAL, DIMENSION(n) :: p,rho,v, rhovy,rhovz, e, c, rhov !,csound
+    REAL, DIMENSION(n,4) :: u, uhalf, flux, psi, f0, f
+    REAL, DIMENSION(n,4) :: fr, fl, r, cc, fluxR, fluxL
+    REAL, DIMENSION(n,4) :: wr, wl, fwr, fwl
+    REAL, DIMENSION(n, 3) :: state
+    flux = getflux(u); 
+    uhalf = u  
+    DO k = 2,1,-1 !R-K stepper
+      rho=u(:,1);  
+      p=rho*csound**2; 
+      v=u(:,2)/u(:,1);  !rhovx/rho 
+      c =  csound + abs(v); 
+      !vvv smooth the freezing speed -- a useful conditioning step. 
+      DO i=1,3
+         c = max(c, cshift(c,1), cshift(c,-1),cshift(c,2),cshift(c,-2)); 
+      ENDDO 
+      c = (c+cshift(c,1)+cshift(c,2)+cshift(c,-1)+cshift(c,-2))/5.; 
+      !^^^ END of smoothing
+      cc = spread(c,2,4); 
+      flux = getflux(uhalf); 
+      wr = u+flux/cc; wl = u-flux/cc 
+      ! TVD is only proven for constant c. One can also try tricks like 
+      ! dividing fluxes by some function (e.g., c) to smooth them out, 
+      ! THEN DOing tvd on them, THEN multiplying them by c to reconstruct new 
+      ! versions. (Not implemented now.)
+      fwr= wr*cc;     fwl= -wl*cc; 
+      fluxR = tvdflux(wr, fwr); 
+      fluxL = cshift(reverse(tvdflux(reverse(wl),reverse(fwl))),1,1);  
+      flux = (fluxR + fluxL)/2; 
+      uhalf = u-(flux-cshift(flux,-1,1))*dt/k;
+    END DO !k
+    u = uhalf; 
+  END SUBROUTINE tvdeuler
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function reverse(a) result(reversed)
+    IMPLICIT NONE
+    REAL ::  a(:,:)
+    REAL, DIMENSION(size(a,1),size(a,2)) :: reversed 
+    INTEGER :: N
+    N = size(a,1); 
+    reversed(:,:) = a(N:1:-1,:)
+  END function reverse
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function tvdflux(u,f) result(flux) 
+    IMPLICIT NONE
+    !rightward flux -> tvd, 2d-order in x
+    REAL :: u(:,:), f(:,:)
+    REAL, DIMENSION(size(u,1),size(u,2)) :: flux, fr, fl, r, psi
+    fr = (cshift(f,1,1)-f)/2      ! deltaflux-right
+    fl = (f - cshift(f,-1,1))/2   ! deltaflux-left
+    r=0
+    where (fr*fl>0) r = fl/fr; 
+    !psi = (r+abs(r))/(1+r)        !van Leer
+    psi = max(0.,min(abs(r),1.));   !minmod
+    ! psi = max(0., min(2*r,1.),min(r,2.)); !superbee
+    flux = f + psi*fr; 
+  END function tvdflux
+
+  !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  function getflux(u) result(flux)!derive physical flux from state --EULER
+    REAL, PARAMETER :: cssquared = 1 
+    REAL :: u(:,:)
+    REAL, DIMENSION(size(u,1),size(u,2)) :: flux, cc
+    REAL, DIMENSION(size(u,1)) :: rho, rhov, v, p, e
+    REAL, DIMENSION(size(u,1), 3) :: state
+
+    rhov = u(:,2); rho = u(:,1); v=rhov/rho;
+    flux(:,1) = rhov; 
+    flux(:,2) = rhov*v + rho*cssquared; 
+    flux(:,3) = u(:,3)*v;  ! passive transport of rho v_y 
+    flux(:,4) = u(:,4)*v;  ! passive transport of rho v_z
+  END function getflux
+  
+  
+  SUBROUTINE output_stdout(nstep,cputime,numinject,t,dt,min)
+    INTEGER :: nstep,numinject
+    REAL :: t,dt,min
+    REAL(8) :: cputime
+    PRINT*,"Report from node ", node
+    PRINT*,node,"   nsteps = ", nstep
+    PRINT*,node,"   cputime = ", cputime
+    PRINT*,node,"   numinject = ", numinject
+    PRINT*,node,"   t = ", t
+    PRINT*,node,"   dt = ", dt
+    PRINT*,node,"   min(rho) = ", minval(u(:,:,:,1))
+  END SUBROUTINE output_stdout
+  
+  SUBROUTINE output_file(u,n,t,nstep)
+    integer :: n,nstep,i,j,k
+    CHARACTER*128 filename
+    real, dimension(n,n,n,4) :: u
+    real :: t
+    
+    !Write timing info
+    if (node .eq. 0) then
+      OPEN(UNIT=2, FILE='output-times', ACCESS='APPEND')
+      WRITE(2,850) t,nstep
+      850 FORMAT(E15.6,' ',I10.10)
+      CLOSE(2)
+    end if
+    
+    !Create the filename
+    WRITE(filename,800) nstep, node
+    800 format('output-',I8.8,'-',I3.3)
+    OPEN(UNIT=2, FILE=TRIM(filename))
+    print*,"Writing to: ",filename,"@ nstep=",nstep
+    DO i = 1,n
+      DO j = 1,n
+        DO k = 1, n
+          write(2,900) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
+          900 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
+               !i,j,k, rho, rho vx, rho vy, rho vz. 
+        END DO !k
+      END DO !j
+    END DO !i
+    CLOSE(2)
+  END SUBROUTINE output_file
+  
+  SUBROUTINE setup(u,n)
+    INTEGER :: n
+    REAL, DIMENSION(n,n,n,4) :: u
+    
+    !Constant uniform initial density
+    u(:,:,:,1) = 1
+    
+    !Zero velocity field
+    u(:,:,:,2) = 0
+    u(:,:,:,3) = 0
+    u(:,:,:,4) = 0
+  END SUBROUTINE setup
+
+  REAL FUNCTION myrand()
+    INTEGER :: stat
+    READ(1,"(F12.10)", IOSTAT=stat) myrand
+    IF (stat .ne. 0) THEN
+      PRINT*,"An error occured while reading the random file:"
+      IF (stat .lt. 0) PRINT*,"  End of file"
+      IF (stat .gt. 0) PRINT*,"  Undetermined"
+      STOP
+    END IF
+    return
+  END FUNCTION myrand
+    
+end

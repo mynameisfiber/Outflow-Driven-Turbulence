@@ -23,10 +23,10 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=32, ghost=3
+integer, parameter :: procs = 8, n=120, ghost=3
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
-integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 20, MAXINJECT=1
-integer, parameter :: outputfreq=2, snapshotfreq=5
+integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 0, MAXINJECT=0
+integer, parameter :: outputfreq=250, snapshotfreq=500
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 REAL :: dt, t
@@ -37,8 +37,8 @@ integer :: ierr, COMM_CART
 character*64 :: randfile = "random.txt", returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
 integer :: nstep=1, numinject = 1
-REAL, PARAMETER :: oImp=15012.6, oSnorm=2.91e-4*n**3, odinj=0.05, osoft=0.0 
-INTEGER, PARAMETER :: or = 4
+REAL, PARAMETER :: oImp=15012.6,oSnorm=2.91e-5*n**3*procs,odinj=0.05,osoft=0.0 
+INTEGER, PARAMETER :: or = 8
 
 !Check that variables make sense
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
@@ -79,7 +79,7 @@ IF (snapshotfreq .NE. 0) CALL output_file(u,n,0.0,0)
 t=0.0; dt=0.15
 
 do while (returnmsg .eq. "")
-  if (node .eq. 0) print*,"nstep=",nstep
+  if (node .eq. 0) print*,"Starting nstep=",nstep,"t=",t
   
   !Manage outflows
   CALL outflow_manager(u,n,dt,numinject)
@@ -90,6 +90,7 @@ do while (returnmsg .eq. "")
   !Calculate timestep
   CALL timestep(dt, u,n,CFL)
   t = t+2*dt;
+  if (node .eq. 0) print*,"  dt=",dt
   
   !Strang splitting of operators
   CALL doX(u,n,dt); 
@@ -116,7 +117,8 @@ do while (returnmsg .eq. "")
   ELSE IF (minval(u(:,:,:,1)) .LT. 0) THEN
     returnmsg = "Negative Density"
   END IF
-      
+
+  if (node .eq. 0) PRINT*,"DONE"
   nstep = nstep + 1
 end do
 
@@ -129,17 +131,18 @@ if (node .eq. 0) then
 end if
 call MPI_FINALIZE(ierr)
 CLOSE(1)
-return
+STOP
 
 
 CONTAINS
 
   SUBROUTINE outflow_manager(u,n,dt,numinject)
-    INTEGER :: n, oi,oj,ok, numinject
+    INTEGER :: n, oi,oj,ok, numinject, events
     REAL, DIMENSION(n,n,n,4) :: u
     REAL :: dt, ci,cj,ck
-    
-    DO WHILE( myrand() .GT. exp(-1.0*oSnorm*dt)*(oSnorm*dt) .AND. &
+
+    events = 0
+    DO WHILE( myrand() .LE. exp(-1.0*oSnorm*dt)*(oSnorm*dt)**events/factorial(events) .AND. &
   	(MAXINJECT .EQ. 0 .OR. numinject .LE. MAXINJECT))
     
       !Find coordinates of the outflow
@@ -154,7 +157,7 @@ CONTAINS
         ck = myrand()*2-1
       end if
     
-      if (node .eq. 0) print*,"Creating outflow at: ",oi,oj,ok
+      if (node .eq. 0) print*,"  Creating outflow at: ",oi,oj,ok
       !Now we check if the outflow occures in the local grid.  This is done by
       !   finding the components of the distance at the closest approach and 
       !   seeing if any component is larger than the local grid width
@@ -167,6 +170,7 @@ CONTAINS
         CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
       END IF
       
+      events = events + 1
       numinject = numinject + 1
     END DO
   END SUBROUTINE outflow_manager
@@ -294,7 +298,7 @@ CONTAINS
     rhovx = u(:,:,:, 2); 
     rhovy = u(:,:,:, 3);            
     rhovz = u(:,:,:, 4); 
-    dt = CFL/(maxval(cs + max(abs(rhovx), abs(rhovy), abs(rhovz))/rho) )
+    ldt = CFL/(maxval(cs + max(abs(rhovx), abs(rhovy), abs(rhovz))/rho) )
     call MPI_Allreduce (ldt, dt, 1, MPI_REAL, MPI_MIN, COMM_CART, ierr )
     
   END SUBROUTINE timestep
@@ -503,6 +507,18 @@ CONTAINS
     u(:,:,:,3) = 0
     u(:,:,:,4) = 0
   END SUBROUTINE setup
+  
+  REAL FUNCTION factorial(n)
+    INTEGER :: i,n
+    REAL :: result
+    
+    result = 1
+    do i=1,n
+      result = result * i
+    end do
+    factorial = result
+    return
+  END FUNCTION factorial
 
   REAL FUNCTION myrand()
     INTEGER :: stat

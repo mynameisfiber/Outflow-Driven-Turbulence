@@ -1,5 +1,5 @@
-CC=mpif90
-RUN=mpirun
+CC=mpif77.lam
+RUN=mpirun.lam
 
 isoth3d-mpi:
 	${CC} -fopenmp -O3 -o isoth3d-mpi isoth3d-mpi.f90

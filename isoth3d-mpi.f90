@@ -23,10 +23,10 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=120, ghost=3
+integer, parameter :: procs = 8, n=66, ghost=3
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
-integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 0, MAXINJECT=0
-integer, parameter :: outputfreq=250, snapshotfreq=500
+integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 80, MAXINJECT=0
+integer, parameter :: outputfreq=10, snapshotfreq=10
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 REAL :: dt, t
@@ -78,6 +78,7 @@ CALL timestep(dt, u,n,CFL)
 IF (snapshotfreq .NE. 0) CALL output_file(u,n,0.0,0)
 t=0.0; dt=0.15
 
+call MPI_Barrier (MPI_COMM_WORLD,ierr)
 do while (returnmsg .eq. "")
   if (node .eq. 0) print*,"Starting nstep=",nstep,"t=",t
   
@@ -142,7 +143,7 @@ CONTAINS
     REAL :: dt, ci,cj,ck
 
     events = 0
-    DO WHILE( myrand() .LE. exp(-1.0*oSnorm*dt)*(oSnorm*dt)**events/factorial(events) .AND. &
+    DO WHILE( myrand() .LE. exp(-1.0*dt/oSnorm)*(dt/oSnorm)**events/factorial(events) .AND. &
   	(MAXINJECT .EQ. 0 .OR. numinject .LE. MAXINJECT))
     
       !Find coordinates of the outflow

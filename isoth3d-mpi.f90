@@ -23,10 +23,10 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=66, ghost=3
+integer, parameter :: procs = 8, n=33, ghost=3
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
-integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 80, MAXINJECT=0
-integer, parameter :: outputfreq=10, snapshotfreq=10
+integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 100, MAXINJECT=0
+integer, parameter :: outputfreq=10, snapshotfreq=5
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 REAL :: dt, t
@@ -36,8 +36,8 @@ integer :: node, globaln
 integer :: ierr, COMM_CART
 character*64 :: randfile = "random.txt", returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
-integer :: nstep=1, numinject = 1
-REAL, PARAMETER :: oImp=15012.6,oSnorm=2.91e-5*n**3*procs,odinj=0.05,osoft=0.0 
+integer :: nstep=1, numinject = 0
+REAL, PARAMETER :: oImp=15012.6,oSnorm=2.91e-5*n**3*procs,odinj=0.05,osoft=0.0
 INTEGER, PARAMETER :: or = 8
 
 !Check that variables make sense
@@ -76,7 +76,7 @@ OPEN(UNIT=1, FILE=randfile)
 CALL setup(u,n)
 CALL timestep(dt, u,n,CFL)
 IF (snapshotfreq .NE. 0) CALL output_file(u,n,0.0,0)
-t=0.0; dt=0.15
+t=0.0;
 
 call MPI_Barrier (MPI_COMM_WORLD,ierr)
 do while (returnmsg .eq. "")
@@ -140,23 +140,22 @@ CONTAINS
   SUBROUTINE outflow_manager(u,n,dt,numinject)
     INTEGER :: n, oi,oj,ok, numinject, events
     REAL, DIMENSION(n,n,n,4) :: u
-    REAL :: dt, ci,cj,ck
+    REAL :: dt, ci=0.0,cj=0.0,ck=0.0
 
     events = 0
     DO WHILE( myrand() .LE. exp(-1.0*dt/oSnorm)*(dt/oSnorm)**events/factorial(events) .AND. &
-  	(MAXINJECT .EQ. 0 .OR. numinject .LE. MAXINJECT))
+  	(MAXINJECT .EQ. 0 .OR. numinject .LT. MAXINJECT))
     
       !Find coordinates of the outflow
       oi = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
       oj = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
       ok = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
       
-      !Create random orientation
-      if (osoft .NE. 0.0) then
-        ci = myrand()*2-1
-        cj = myrand()*2-1
-        ck = myrand()*2-1
-      end if
+      !Create random orientation.  We still poll myrand() even if softangle==0
+      ! to keep the random number file sync'd for different runs.
+      ci = myrand()*2-1
+      cj = myrand()*2-1
+      ck = myrand()*2-1
     
       if (node .eq. 0) print*,"  Creating outflow at: ",oi,oj,ok
       !Now we check if the outflow occures in the local grid.  This is done by
@@ -188,42 +187,60 @@ CONTAINS
     
     V = (4.0 * PI / 3.0) * or**3
     collen = (ci**2 + cj**2 + ck**2)**.5
-    colnorm = .005
+    colnorm = .05
+    
+    !First we normalize to coordinates to the grid as to wrap any
+    !   outflows around the periodic grid
+    oi = oi-coords(1)+2*ghost*offset(1)
+    oj = oj-coords(2)+2*ghost*offset(2)
+    ok = ok-coords(3)+2*ghost*offset(3)
+    
+    if (oi .lt. -1*or) then
+      oi = oi + (globaln-2*procs**(1/3.0)*ghost)
+    else if (oi .gt. n+or) then
+      oi = oi - (globaln-2*procs**(1/3.0)*ghost)
+    end if
+    if (oj .lt. -1*or) then
+      oj = oj + (globaln-2*procs**(1/3.0)*ghost)
+    else if (oj .gt. n+or) then
+      oj = oj - (globaln-2*procs**(1/3.0)*ghost)
+    end if
+    if (ok .lt. -1*or) then
+      ok = ok + (globaln-2*procs**(1/3.0)*ghost)
+    else if (ok .gt. n+or) then
+      ok = ok - (globaln-2*procs**(1/3.0)*ghost)
+    end if
     
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n) &
+    !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n,offset) &
     !$OMP PRIVATE(i,j,k,r,ni,nj,nk,P,mu) DEFAULT(none)
     DO k=ok-or,ok+or
       DO j=oj-or,oj+or
         DO i=oi-or,oi+or
           r = ((i-oi)**2 + (j-oj)**2 + (k-ok)**2)**.5
-          IF (r .LT. or .AND. r .NE. 0) THEN
+          IF (r .LE. or .AND. r .NE. 0) THEN
           
-            !First we normalize to coordinates to the grid as to wrap any
-            !   outflows around the periodic grid
-            ni = MOD(i,globaln)-coords(1)
-            nj = MOD(j,globaln)-coords(2)
-            nk = MOD(k,globaln)-coords(3)
             !Now we check if the given coordinate is inside this grid
-            IF (MAXVAL((/ni,nj,nk/)) .LE. n-ghost .AND. &
-                MINVAL((/ni,nj,nk/)) .GT. ghost) THEN
+            IF (MAXVAL((/i,j,k/)) .LE. n-ghost+1 .AND. &
+                MINVAL((/i,j,k/)) .GE. ghost-1) THEN
           
               !Take care of collimation
               IF (osoft .GT. 0) THEN
                 mu = ACOS( DOT_PRODUCT((/ i-oi,j-oj,k-ok /),(/ ci,cj,ck /)) &
                      / (r*collen) ) * 2.0 / PI - 1
                 P = colnorm / (1 + osoft**2 - mu**2)
+                PRINT*,"COLLIMATED!",osoft,mu,(/ci,cj,ck/)
               ELSE
                 P = 1.0
               END IF
               
               !Mass injection
-              u(ni,nj,nk,1) = u(ni,nj,nk,1) + (or-r)*odinj
+              u(i,j,k,1) = u(i,j,k,1) + (or-r)*odinj
               
               !Inject correct momentum per unit volume
-              u(ni,nj,nk,2) = u(ni,nj,nk,2) + P*oImp/V * (i-oi)/r
-              u(ni,nj,nk,3) = u(ni,nj,nk,3) + P*oImp/V * (j-oj)/r
-              u(ni,nj,nk,4) = u(ni,nj,nk,4) + P*oImp/V * (k-ok)/r
+              u(i,j,k,2) = u(i,j,k,2) + P*oImp/V * (i-oi)/r
+              u(i,j,k,3) = u(i,j,k,3) + P*oImp/V * (j-oj)/r
+              u(i,j,k,4) = u(i,j,k,4) + P*oImp/V * (k-ok)/r
             END IF
           END IF
         END DO
@@ -234,8 +251,8 @@ CONTAINS
   END SUBROUTINE generate_outflow
 
   SUBROUTINE boundary(u,n,ghost)
-    integer :: n, ghost, dim, ndown, nup, count, ierr, tmp
-    integer, dimension(3) :: sds, sde, sus, sue, rd, ru
+    integer :: n, ghost, dim, ndown, nup, count, ierr, tmp, comm
+    integer, dimension(3) :: sds, sde, sus, sue, rd, ru, dims
     real, DIMENSION(n,n,n,4) :: u
     
     !Set up the boundries to be sent.  The variables are defined as:
@@ -254,35 +271,37 @@ CONTAINS
     
     count = n*n*ghost*4
     call MPI_Barrier (COMM_CART,ierr)
+    call MPI_Comm_dup(COMM_CART,comm,ierr)
     DO dim=0,2
       !Find neighboors
-      call MPI_Cart_shift (COMM_CART, dim, 1, &
+      call MPI_Cart_shift (comm, dim, -1, &
            ndown, tmp, ierr)
-      call MPI_Cart_shift (COMM_CART, dim, -1, &
+      call MPI_Cart_shift (comm, dim, +1, &
            nup, tmp, ierr)
                           
       !First we send to the down
       !print*,"D",node,"->",ndown
-      call MPI_Sendrecv(u(sds(1):sde(1),sds(2):sde(2),sds(3):sde(3),:), count,&
-                        MPI_REAL, ndown, node, u(ru(1):n,ru(2):n,ru(3):n,:), &
-                        count, MPI_REAL, nup, nup, COMM_CART, &
+      call MPI_Sendrecv(u(sus(1):sue(1),sus(2):sue(2),sus(3):sue(3),:), count,&
+                        MPI_REAL, ndown, 1, u(1:rd(1),1:rd(2),1:rd(3),:), &
+                        count, MPI_REAL, ndown, 1, comm, &
                         MPI_STATUS_IGNORE, ierr)
       
       !Now we send to the up
       !print*,"U",node,"->",nup
-      call MPI_Sendrecv(u(sus(1):sue(1),sus(2):sue(2),sus(3):sue(3),:), count,&
-                        MPI_REAL, nup, node, u(1:rd(1),1:rd(2),1:rd(3),:), &
-                        count, MPI_REAL, ndown,ndown,COMM_CART, &
+      call MPI_Sendrecv(u(sds(1):sde(1),sds(2):sde(2),sds(3):sde(3),:), count,&
+                        MPI_REAL, nup, 2, u(ru(1):n,ru(2):n,ru(3):n,:), &
+                        count, MPI_REAL, nup,2, comm, &
                         MPI_STATUS_IGNORE,ierr)
                        
       !Adjust boundries to be sent for next iteration 
-      rd = cshift(rd,1)
-      ru = cshift(ru,1)
-      sds = cshift(sds,1)
-      sde = cshift(sde,1)
-      sus = cshift(sus,1)
-      sue = cshift(sue,1)
+      rd = cshift(rd,2)
+      ru = cshift(ru,2)
+      sds = cshift(sds,2)
+      sde = cshift(sde,2)
+      sus = cshift(sus,2)
+      sue = cshift(sue,2)
     END DO
+    call MPI_Comm_free(comm,ierr)
   END SUBROUTINE boundary
   
   
@@ -502,6 +521,7 @@ CONTAINS
     
     !Constant uniform initial density
     u(:,:,:,1) = 1
+    !if (node .eq. 0) u(:,:,:,1) = 1.2
     
     !Zero velocity field
     u(:,:,:,2) = 0

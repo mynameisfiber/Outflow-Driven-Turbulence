@@ -23,10 +23,10 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=33, ghost=3
+integer, parameter :: procs = 8, n=120, ghost=3
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
-integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 100, MAXINJECT=0
-integer, parameter :: outputfreq=10, snapshotfreq=5
+integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 0, MAXINJECT=0
+integer, parameter :: outputfreq=50, snapshotfreq=50
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 REAL :: dt, t
@@ -78,7 +78,6 @@ CALL timestep(dt, u,n,CFL)
 IF (snapshotfreq .NE. 0) CALL output_file(u,n,0.0,0)
 t=0.0;
 
-call MPI_Barrier (MPI_COMM_WORLD,ierr)
 do while (returnmsg .eq. "")
   if (node .eq. 0) print*,"Starting nstep=",nstep,"t=",t
   
@@ -503,9 +502,9 @@ CONTAINS
     800 format('output-',I8.8,'-',I3.3)
     OPEN(UNIT=2, FILE=TRIM(filename))
     print*,"Writing to: ",filename,"@ nstep=",nstep
-    DO i = 1,n
-      DO j = 1,n
-        DO k = 1, n
+    DO i = ghost+1,n-ghost
+      DO j = ghost+1,n-ghost
+        DO k = ghost+1,n-ghost
           write(2,900) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
           900 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
                !i,j,k, rho, rho vx, rho vy, rho vz. 

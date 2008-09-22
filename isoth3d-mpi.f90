@@ -11,7 +11,8 @@ include "omp_lib.h"
 !     ghost - number of ghost cells
 !     CFL - courant number
 !     outputfreq - frequency of stdout dumps
-!     snapshotfreq - frequency of file dumps
+!     snapshotfreqt - how many physical seconds to output (analysis, slice, snapshot)
+!     snapshotfreqnstep - how many steps to output (analysis, slice, snapshot)
 !     dims - # of nodes for each dimension
 !     u - test grid
 !     ghost - number of ghost zones
@@ -23,13 +24,15 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=120, ghost=3
+integer, parameter :: procs = 8, n=15, ghost=3
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
 integer, parameter :: MAXTIME = 20700.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime = 5.75 hours
-integer, parameter :: outputfreq=50, snapshotfreqnstep=0
-real, parameter :: sqrt2=sqrt(2.0),  snapshotfreqt=0.634
+integer, parameter :: outputfreq=50
+INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
+REAL, DIMENSION(3) :: snapshotfreqt = (/ 1, 10, 50 /) * 6.34, lastsavet = 0
+real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
-REAL :: dt, t, lastsavet=0
+REAL :: dt, t
 real, DIMENSION(n,n,n,4) :: u
 integer, DIMENSION(3) :: offset, coords, isedge
 integer :: node, globaln
@@ -103,10 +106,10 @@ do while (returnmsg .eq. "")
   cputime = MPI_Wtime() - cputimeoffset
 
   !Output
-  if ((SNAPSHOTFREQNSTEP .NE. 0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP) .EQ. 0) &
-  .OR. (SNAPSHOTFREQT .NE. 0 .AND. t .GE. SNAPSHOTFREQT + lastsavet)) THEN
+  if ((SNAPSHOTFREQNSTEP(3) .NE. 0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP(3)) .EQ. 0) &
+  .OR. (SNAPSHOTFREQT(3) .NE. 0 .AND. t .GE. SNAPSHOTFREQT(3) + lastsavet(3))) THEN
       call output_file(u,n,t,nstep)
-      lastsavet = t
+      lastsavet(3) = t
   END IF
   if (OUTPUTFREQ .NE. 0 .AND. MOD(nstep, OUTPUTFREQ) .EQ. 0 ) &
       CALL output_stdout(nstep,cputime,numinject,t,dt,minval(u(:,:,:,1)))

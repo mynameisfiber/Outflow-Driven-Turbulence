@@ -25,11 +25,11 @@ include "omp_lib.h"
 !     isedge - +1 for top edge, -1 for bottom edge
 integer, parameter :: procs = 8, n=120, ghost=3
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
-integer, parameter :: MAXTIME = 0.0, MAXSTEPS = 0, MAXINJECT=0
-integer, parameter :: outputfreq=50, snapshotfreq=50
-real, parameter :: sqrt2=sqrt(2.0)
+integer, parameter :: MAXTIME = 20700.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime = 5.75 hours
+integer, parameter :: outputfreq=50, snapshotfreqnstep=0
+real, parameter :: sqrt2=sqrt(2.0),  snapshotfreqt=0.634
 integer, DIMENSION(3) :: dims
-REAL :: dt, t
+REAL :: dt, t, lastsavet=0
 real, DIMENSION(n,n,n,4) :: u
 integer, DIMENSION(3) :: offset, coords, isedge
 integer :: node, globaln
@@ -75,7 +75,6 @@ OPEN(UNIT=1, FILE=randfile)
 !Initialization
 CALL setup(u,n)
 CALL timestep(dt, u,n,CFL)
-IF (snapshotfreq .NE. 0) CALL output_file(u,n,0.0,0)
 t=0.0;
 
 do while (returnmsg .eq. "")
@@ -104,9 +103,12 @@ do while (returnmsg .eq. "")
   cputime = MPI_Wtime() - cputimeoffset
 
   !Output
-  if (SNAPSHOTFREQ .NE. 0 .AND. MOD(nstep, SNAPSHOTFREQ) .EQ. 0) &
+  if ((SNAPSHOTFREQNSTEP .NE. 0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP) .EQ. 0) &
+  .OR. (SNAPSHOTFREQT .NE. 0 .AND. t .GE. SNAPSHOTFREQT + lastsavet)) THEN
       call output_file(u,n,t,nstep)
-  if (OUTPUTFREQ .NE. 0 .AND. MOD(nstep, OUTPUTFREQ) .EQ. 0) &
+      lastsavet = t
+  END IF
+  if (OUTPUTFREQ .NE. 0 .AND. MOD(nstep, OUTPUTFREQ) .EQ. 0 ) &
       CALL output_stdout(nstep,cputime,numinject,t,dt,minval(u(:,:,:,1)))
 
   !Check if it's time to leave

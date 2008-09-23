@@ -1,8 +1,8 @@
-CC=mpif77.lam
-RUN=mpirun.lam
+CC=mpif90
+RUN=mpirun
 
 isoth3d-mpi:
-	${CC} -O3 -o isoth3d-mpi isoth3d-mpi.f90 analysis.f90
+	${CC} -O3 -o isoth3d-mpi analysis.f90 isoth3d-mpi.f90 
 
 isoth3d:
 	gfortran -O3 -g -pg -fopenmp -o isoth3d isoth3d.f90 

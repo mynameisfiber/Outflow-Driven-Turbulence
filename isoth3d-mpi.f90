@@ -25,12 +25,12 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=15, ghost=3
+integer, parameter :: procs = 8, n=120, ghost=3
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
 integer, parameter :: MAXTIME = 20700.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime = 5.75 hours
-integer, parameter :: outputfreq=50
+integer, parameter :: outputfreq=100
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
-REAL, DIMENSION(3) :: snapshotfreqt = (/ 1, 10, 50 /) * 6.34, lastsavet = 0
+REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/10, .5 /) * 6.34, lastsavet = 0
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 REAL :: dt, t
@@ -70,6 +70,8 @@ coords = offset * n
 isedge = INT(2*coords/(globaln-n)-1)
 print*,"node=",node,"(x,y,z) = ",coords
 
+!Initialize the analysis module
+call analysis_init(30,20,oImp**(4.0/7.0)*(oSnorm/n**3.0)**(3.0/7.0),node)
 
 !Now we open the random number file and set it to IO unit 1
 ! note: read mode is default
@@ -109,9 +111,22 @@ do while (returnmsg .eq. "")
   !Output
   if ((SNAPSHOTFREQNSTEP(3).NE.0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP(3)).EQ.0) &
   .OR. (SNAPSHOTFREQT(3) .NE. 0 .AND. t .GE. SNAPSHOTFREQT(3) + lastsavet(3))) THEN
-      call output_file(u,n,t,nstep)
+      call output_file_cube(u,n,t,nstep)
       lastsavet(3) = t
   END IF
+  
+  if ((SNAPSHOTFREQNSTEP(2).NE.0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP(2)).EQ.0) &
+  .OR. (SNAPSHOTFREQT(2) .NE. 0 .AND. t .GE. SNAPSHOTFREQT(2) + lastsavet(2))) THEN
+      call output_file_slice(u,n,t,nstep)
+      lastsavet(2) = t
+  END IF
+  
+  if ((SNAPSHOTFREQNSTEP(1).NE.0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP(1)).EQ.0) &
+  .OR. (SNAPSHOTFREQT(1) .NE. 0 .AND. t .GE. SNAPSHOTFREQT(1) + lastsavet(1))) THEN
+      call analysis_calc(u,n,ghost,t,nstep)
+      lastsavet(1) = t
+  END IF
+  
   if (OUTPUTFREQ .NE. 0 .AND. MOD(nstep, OUTPUTFREQ) .EQ. 0 ) &
       CALL output_stdout(nstep,cputime,numinject,t,dt,minval(u(:,:,:,1)))
 
@@ -489,7 +504,7 @@ CONTAINS
     PRINT*,node,"   min(rho) = ", minval(u(:,:,:,1))
   END SUBROUTINE output_stdout
   
-  SUBROUTINE output_file(u,n,t,nstep)
+  SUBROUTINE output_file_slice(u,n,t,nstep)
     integer :: n,nstep,i,j,k
     CHARACTER*128 filename
     real, dimension(n,n,n,4) :: u
@@ -497,7 +512,7 @@ CONTAINS
     
     !Write timing info
     if (node .eq. 0) then
-      OPEN(UNIT=2, FILE='output-times', ACCESS='APPEND')
+      OPEN(UNIT=2, FILE='output-times-slice', ACCESS='APPEND')
       WRITE(2,850) t,nstep
       850 FORMAT(E15.6,' ',I10.10)
       CLOSE(2)
@@ -505,20 +520,50 @@ CONTAINS
     
     !Create the filename
     WRITE(filename,800) nstep, node
-    800 format('output-',I8.8,'-',I3.3)
+    800 format('output-slice-',I8.8,'-',I3.3)
     OPEN(UNIT=2, FILE=TRIM(filename))
     print*,"Writing to: ",filename,"@ nstep=",nstep
-    DO i = ghost+1,n-ghost
+    k = INT(n/2)
+    DO k = ghost+1,n-ghost
       DO j = ghost+1,n-ghost
-        DO k = ghost+1,n-ghost
           write(2,900) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
           900 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
                !i,j,k, rho, rho vx, rho vy, rho vz. 
-        END DO !k
       END DO !j
-    END DO !i
+    END DO !k
     CLOSE(2)
-  END SUBROUTINE output_file
+  END SUBROUTINE output_file_slice
+  
+  SUBROUTINE output_file_cube(u,n,t,nstep)
+    integer :: n,nstep,i,j,k
+    CHARACTER*128 filename
+    real, dimension(n,n,n,4) :: u
+    real :: t
+    
+    !Write timing info
+    if (node .eq. 0) then
+      OPEN(UNIT=2, FILE='output-times-cube', ACCESS='APPEND')
+      WRITE(2,850) t,nstep
+      850 FORMAT(E15.6,' ',I10.10)
+      CLOSE(2)
+    end if
+    
+    !Create the filename
+    WRITE(filename,800) nstep, node
+    800 format('output-cube-',I8.8,'-',I3.3)
+    OPEN(UNIT=2, FILE=TRIM(filename))
+    print*,"Writing to: ",filename,"@ nstep=",nstep
+    DO k = ghost+1,n-ghost
+      DO j = ghost+1,n-ghost
+        DO i = ghost+1,n-ghost
+          write(2,900) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
+          900 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
+               !i,j,k, rho, rho vx, rho vy, rho vz. 
+        END DO !i
+      END DO !j
+    END DO !k
+    CLOSE(2)
+  END SUBROUTINE output_file_cube
   
   SUBROUTINE setup(u,n)
     INTEGER :: n

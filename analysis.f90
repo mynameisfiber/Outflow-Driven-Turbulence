@@ -32,6 +32,9 @@ MODULE analysis
     counter = 1
     meanrho = SUM(u(:,:,:,1))/(n*n*n)
     
+    !$OMP PARALLEL DO SCHEDULE(STATIC) &
+    !$OMP shared(u,n,ghost,kinetic,compressional,sigma,counter,charv,binsv) &
+    !$OMP PRIVATE(i,j,k,pos,meanvel) DEFAULT(none)
     do k=ghost+1,n-ghost
       do j=ghost+1,n-ghost
         do i=ghost+1,n-ghost

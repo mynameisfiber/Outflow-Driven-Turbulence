@@ -11,5 +11,5 @@ runmpi: isoth3d-mpi
 	${RUN} -np `egrep -o "procs([ ]?)=([ 0-9]*)" isoth3d-mpi.f90 | tr -d " " | cut -d"=" -f2` isoth3d-mpi
 
 clean:
-	rm -rf output-* isoth3d isoth3d2 gmon.out isoth3d-mpi
+	rm -rf output-* isoth3d isoth3d2 gmon.out isoth3d-mpi analysis.mod
 

@@ -1,5 +1,6 @@
 program gridcontrol
-  
+
+use analysis
 implicit none
 include "mpif.h"
 include "omp_lib.h"
@@ -96,17 +97,17 @@ do while (returnmsg .eq. "")
   
   !Strang splitting of operators
   CALL doX(u,n,dt); 
-   CALL doY(u,n,dt); 
-    CALL doZ(u,n,dt); 
-    CALL doZ(u,n,dt); 
-   CALL doY(u,n,dt); 
+    CALL doY(u,n,dt); 
+      CALL doZ(u,n,dt); 
+      CALL doZ(u,n,dt); 
+    CALL doY(u,n,dt); 
   CALL doX(u,n,dt);
 
   !update time
   cputime = MPI_Wtime() - cputimeoffset
 
   !Output
-  if ((SNAPSHOTFREQNSTEP(3) .NE. 0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP(3)) .EQ. 0) &
+  if ((SNAPSHOTFREQNSTEP(3).NE.0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP(3)).EQ.0) &
   .OR. (SNAPSHOTFREQT(3) .NE. 0 .AND. t .GE. SNAPSHOTFREQT(3) + lastsavet(3))) THEN
       call output_file(u,n,t,nstep)
       lastsavet(3) = t

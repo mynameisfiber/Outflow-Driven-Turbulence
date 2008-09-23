@@ -1,11 +1,20 @@
 MODULE analysis
   IMPLICIT NONE
-  INTEGER, PARAMETER :: bins=100
-  REAL, DIMENSION(bins) :: sigma
+  INTEGER :: bins
+  REAL, DIMENSION(*), ALLOCATABLE :: sigma
   
   CONTAINS
   
-  SUBROUTINE analyse(u,n,ghost)
+  SUBROUTINE analysisinit(ibins)
+    INTEGER :: ibins
+    
+    bins = ibins
+    ALLOCATE(sigma, ibins)
+    sigma = 0
+  
+  END SUBROUTINE analysisinit
+  
+  SUBROUTINE analysiscalc(u,n,ghost)
     INTEGER :: n, ghost, k,j,i
     REAL :: kinetic=0, compressional=0, meanrho=0, meanvel = 0
     REAL, DIMENSION(n,n,n,4) :: u
@@ -30,7 +39,7 @@ MODULE analysis
       end do
     end do
   
-  END SUBROUTINE analyse
+  END SUBROUTINE analysiscalc
   
   SUBROUTINE outputone(fileprefix, filesuffix, value)
     CHARACTER*64 fileprefix, filename

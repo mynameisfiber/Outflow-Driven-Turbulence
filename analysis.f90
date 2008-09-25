@@ -3,7 +3,7 @@ MODULE analysis
   
   INTEGER, PRIVATE :: binsv, numbins, node
   REAL, PRIVATE :: charv
-  REAL, DIMENSION(:), ALLOCATABLE, PRIVATE :: sigma, counter
+  REAL, DIMENSION(:), ALLOCATABLE, PRIVATE :: sigma, sigmavx
   
   CONTAINS
   
@@ -16,7 +16,7 @@ MODULE analysis
     binsv = ibinsv
     charv = icharv
     ALLOCATE(sigma(numbins*binsv))
-    ALLOCATE(counter(numbins*binsv))
+    ALLOCATE(sigmavx(2*numbins*binsv))
   
   END SUBROUTINE analysis_init
   
@@ -29,11 +29,11 @@ MODULE analysis
   
     !First we get some values ready for the main calculations
     sigma = 0
-    counter = 1
+    sigmavx = 0
     meanrho = SUM(u(:,:,:,1))/(n*n*n)
     
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(u,n,ghost,kinetic,compressional,sigma,counter,charv,binsv,numbins) &
+    !$OMP shared(u,n,ghost,kinetic,compressional,sigma,sigmavx,charv,binsv,numbins) &
     !$OMP PRIVATE(i,j,k,pos,meanmom,meanrho) DEFAULT(none)
     do k=ghost+1,n-ghost
       do j=ghost+1,n-ghost
@@ -51,11 +51,18 @@ MODULE analysis
           pos = INT(meanmom / (charv * u(i,j,k,1)) * binsv)+1
           IF (pos .LT. numbins*binsv .AND. pos .GT. 0) THEN
             sigma(pos) = sigma(pos) + u(i,j,k,1)
-            counter(pos) = counter(pos) + 1
-          ELSE IF (pos .GT. 0)
+          ELSE IF (pos .GT. 0) THEN
             pos = numbins*binsv
             sigma(pos) = sigma(pos) + u(i,j,k,1)
-            counter(pos) = counter(pos) + 1
+          END IF
+          
+          !update sigmavx
+          pos = INT(u(i,j,k,2) / (charv * u(i,j,k,1)) * binsv + charv*binsv)+1
+          IF (pos .LT. 2*numbins*binsv .AND. pos .GT. 0) THEN
+            sigmavx(pos) = sigmavx(pos) + u(i,j,k,1)
+          ELSE IF (pos .GT. 0) THEN
+            pos = 2*numbins*binsv
+            sigmavx(pos) = sigmavx(pos) + u(i,j,k,1)
           END IF
           
         end do
@@ -64,11 +71,12 @@ MODULE analysis
     
     kinetic = kinetic / (n*n*n)
     compressional = compressional / (n*n*n)
-    sigma = sigma / counter
+    sigma = sigma
     
     call outputone("kinetic",-1,kinetic,t,nstep)
     call outputone("compress",-1,compressional,t,nstep)
     call outputn(numbins*binsv,"sigma",nstep,sigma,t,nstep)
+    call outputn(2*numbins*binsv,"sigmavx",nstep,sigmavx,t,nstep)
   
   END SUBROUTINE analysis_calc
   

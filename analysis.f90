@@ -22,10 +22,10 @@ MODULE analysis
   
   SUBROUTINE analysis_calc(u,n,ghost,t,nstep)
     INTEGER :: n, ghost, k,j,i, nstep, pos
-    REAL :: t, kinetic=0, compressional=0, meanrho=0, meanvel = 0
+    REAL :: t, kinetic=0, compressional=0, meanrho=0, meanmom = 0
     REAL, DIMENSION(n,n,n,4) :: u
     
-    PRINT*,"Analyisis: node-",node,"nstep-",nstep,"t-",t
+    !PRINT*,"Analyisis: node-",node,"nstep-",nstep,"t-",t
   
     !First we get some values ready for the main calculations
     sigma = 0
@@ -33,23 +33,27 @@ MODULE analysis
     meanrho = SUM(u(:,:,:,1))/(n*n*n)
     
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(u,n,ghost,kinetic,compressional,sigma,counter,charv,binsv) &
-    !$OMP PRIVATE(i,j,k,pos,meanvel) DEFAULT(none)
+    !$OMP shared(u,n,ghost,kinetic,compressional,sigma,counter,charv,binsv,numbins) &
+    !$OMP PRIVATE(i,j,k,pos,meanmom,meanrho) DEFAULT(none)
     do k=ghost+1,n-ghost
       do j=ghost+1,n-ghost
         do i=ghost+1,n-ghost
         
-          meanvel = (u(i,j,k,2)**2 + u(i,j,k,3)**2 + u(i,j,k,4)**2)**(.5)
+          meanmom = (u(i,j,k,2)**2 + u(i,j,k,3)**2 + u(i,j,k,4)**2)**(.5)
         
           !Calculate kinetic energy
-          kinetic = kinetic + .5 * meanvel / u(i,j,k,1)
+          kinetic = kinetic + .5 * meanmom**2 / u(i,j,k,1)
               
           !Calculate compressional energy
           compressional = compressional + u(i,j,k,1)*log(u(i,j,k,1)/meanrho)
           
           !Update sigma
-          pos = INT(meanvel / charv * binsv)+1
-          IF (pos .LE. numbins*binsv .AND. pos .GT. 0) THEN
+          pos = INT(meanmom / (charv * u(i,j,k,1)) * binsv)+1
+          IF (pos .LT. numbins*binsv .AND. pos .GT. 0) THEN
+            sigma(pos) = sigma(pos) + u(i,j,k,1)
+            counter(pos) = counter(pos) + 1
+          ELSE IF (pos .GT. 0)
+            pos = numbins*binsv
             sigma(pos) = sigma(pos) + u(i,j,k,1)
             counter(pos) = counter(pos) + 1
           END IF
@@ -106,30 +110,26 @@ MODULE analysis
     REAL, DIMENSION(size) :: value
     
     if (node .eq. 0) then
-      WRITE(filename,800) TRIM(fileprefix)
-      800 format('output-times-',A)
+      WRITE(filename,900) TRIM(fileprefix)
+      900 format('output-times-',A)
       OPEN(UNIT=2, FILE=TRIM(filename), ACCESS='APPEND')
-      WRITE(2,805) t,nstep
-      805 FORMAT(E15.6,' ',I10.10)
+      WRITE(2,905) t,nstep
+      905 FORMAT(E15.6,' ',I10.10)
       CLOSE(2)
     end if
     
     IF (filesuffix .eq. -1) THEN
-      WRITE(filename,810) TRIM(fileprefix), node
-      810 format('output-',A,'-',I3.3)
+      WRITE(filename,910) TRIM(fileprefix), node
+      910 format('output-',A,'-',I3.3)
       OPEN(UNIT=2,FILE=TRIM(filename),ACCESS='APPEND')
     ELSE
-      WRITE(filename,820) TRIM(fileprefix), filesuffix, node
-      820 format('output-',A,'-',I8.8,'-',I3.3)
+      WRITE(filename,920) TRIM(fileprefix), filesuffix, node
+      920 format('output-',A,'-',I8.8,'-',I3.3)
       OPEN(UNIT=2,FILE=TRIM(filename))
     END IF
     
     DO i=1,size
-      IF (ISNAN(value(i))) THEN
-        WRITE(2,"(E15.6)") 0
-      ELSE
-        WRITE(2,"(E15.6)") value(i)
-      END IF
+      WRITE(2,"(E15.6)") value(i)
     END DO
     
     CLOSE(2)

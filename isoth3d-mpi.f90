@@ -8,6 +8,7 @@ include "omp_lib.h"
 ! Variable Definitions:
 !     procs - number of processes
 !     n - length of local node
+!     MAXVEL - maximum v_char to inject
 !     globaln - length of global grid
 !     ghost - number of ghost cells
 !     CFL - courant number
@@ -25,23 +26,24 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=120, ghost=3
-REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.65
-integer, parameter :: MAXTIME = 20700.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime = 5.75 hours
+integer, parameter :: procs = 8, n=30, ghost=3
+REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.6
+integer, parameter :: MAXTIME = 42840.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime = 5.75 hours
+real, parameter :: MAXVEL = 75.0
 integer, parameter :: outputfreq=100
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
-REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/10, .5 /) * 6.34, lastsavet = 0
+REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/10, 1.0/2 /) * 1, lastsavet = 0
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 REAL :: dt, t
 real, DIMENSION(n,n,n,4) :: u
 integer, DIMENSION(3) :: offset, coords, isedge
-integer :: node, globaln
+integer :: node, globaln,tmp=0
 integer :: ierr, COMM_CART
 character*64 :: randfile = "random.txt", returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
 integer :: nstep=1, numinject = 0
-REAL, PARAMETER :: oImp=15012.6,oSnorm=2.91e-5*n**3*procs,odinj=0.05,osoft=0.0
+REAL, PARAMETER :: oImp=9012.6,oSnorm=2.91e-5*n**3*procs,odinj=0.05,osoft=0.0
 INTEGER, PARAMETER :: or = 8
 
 !Check that variables make sense
@@ -52,9 +54,14 @@ END IF
 globaln = (procs)**(1.0/3)*n
 dims = globaln/n
 
-
 !Initialize MPI
 call MPI_INIT(ierr)
+call MPI_Comm_size(MPI_COMM_WORLD, tmp, ierr)
+IF (tmp .NE. procs) THEN
+  print*,tmp
+  returnmsg = "Didn't create enough threads for MPI"
+  GOTO 666
+END IF
 cputimeoffset = MPI_Wtime()
 cputime = 0
 
@@ -83,7 +90,8 @@ CALL setup(u,n)
 CALL timestep(dt, u,n,CFL)
 t=0.0;
 
-do while (returnmsg .eq. "")
+call MPI_BARRIER(MPI_COMM_WORLD,ierr)
+do while (TRIM(returnmsg) .eq. "")
   if (node .eq. 0) print*,"Starting nstep=",nstep,"t=",t
   
   !Manage outflows
@@ -143,7 +151,9 @@ do while (returnmsg .eq. "")
   nstep = nstep + 1
 end do
 
-666 PRINT*,"Quiting: ",returnmsg
+666 PRINT*,"Node: ", node, "Quiting: ",returnmsg
+CALL output_stdout(nstep,cputime,numinject,t,dt,minval(u(:,:,:,1)))
+
 if (node .eq. 0) then
   CALL CPU_TIME(tcputime)
   PRINT*,"Average Walltime per CPU:",cputime/procs
@@ -203,11 +213,12 @@ CONTAINS
     !     x - distance between arbitrary point and center of outflow
     INTEGER :: n,oi,oj,ok, i,j,k, ni,nj,nk
     REAL, DIMENSION(n,n,n,4) :: u
-    REAL :: r, ci,cj,ck, V, mu, collen, P, colnorm
+    REAL :: r, ci,cj,ck, V, mu, collen, P, colnorm, vmax
     
     V = (4.0 * PI / 3.0) * or**3
     collen = (ci**2 + cj**2 + ck**2)**.5
     colnorm = .05
+    vmax = oImp**(4.0/7.0)*(oSnorm/n**3.0)**(3.0/7.0) * MAXVEL
     
     !First we normalize to coordinates to the grid as to wrap any
     !   outflows around the periodic grid
@@ -232,7 +243,7 @@ CONTAINS
     end if
     
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n,offset) &
+    !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n,offset,vmax) &
     !$OMP PRIVATE(i,j,k,r,ni,nj,nk,P,mu) DEFAULT(none)
     DO k=ok-or,ok+or
       DO j=oj-or,oj+or
@@ -258,9 +269,12 @@ CONTAINS
               u(i,j,k,1) = u(i,j,k,1) + (or-r)*odinj
               
               !Inject correct momentum per unit volume
-              u(i,j,k,2) = u(i,j,k,2) + P*oImp/V * (i-oi)/r
-              u(i,j,k,3) = u(i,j,k,3) + P*oImp/V * (j-oj)/r
-              u(i,j,k,4) = u(i,j,k,4) + P*oImp/V * (k-ok)/r
+              if (MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) .eq. vmax*u(i,j,k,1)) then
+                print*,"CAPPING INJECT VELOCITY"
+              END IF
+              u(i,j,k,2) = MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) * (i-oi)/r
+              u(i,j,k,3) = MIN(u(i,j,k,3) + P*oImp/V,vmax*u(i,j,k,1)) * (j-oj)/r
+              u(i,j,k,4) = MIN(u(i,j,k,4) + P*oImp/V,vmax*u(i,j,k,1)) * (k-ok)/r
             END IF
           END IF
         END DO
@@ -526,8 +540,8 @@ CONTAINS
     k = INT(n/2)
     DO k = ghost+1,n-ghost
       DO j = ghost+1,n-ghost
-          write(2,900) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
-          900 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
+          write(2,870) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
+          870 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
                !i,j,k, rho, rho vx, rho vy, rho vz. 
       END DO !j
     END DO !k
@@ -543,21 +557,21 @@ CONTAINS
     !Write timing info
     if (node .eq. 0) then
       OPEN(UNIT=2, FILE='output-times-cube', ACCESS='APPEND')
-      WRITE(2,850) t,nstep
-      850 FORMAT(E15.6,' ',I10.10)
+      WRITE(2,951) t,nstep
+      951 FORMAT(E15.6,' ',I10.10)
       CLOSE(2)
     end if
     
     !Create the filename
-    WRITE(filename,800) nstep, node
-    800 format('output-cube-',I8.8,'-',I3.3)
-    OPEN(UNIT=2, FILE=TRIM(filename))
+    WRITE(filename,901) nstep, node
+    901 format('output-cube-',I8.8,'-',I3.3)
     print*,"Writing to: ",filename,"@ nstep=",nstep
+    OPEN(UNIT=2, FILE=TRIM(filename))
     DO k = ghost+1,n-ghost
       DO j = ghost+1,n-ghost
         DO i = ghost+1,n-ghost
-          write(2,900) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
-          900 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
+          write(2,971) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 
+          971 format(E15.6,' ',E15.6,' ',E15.6,' ',E15.6)
                !i,j,k, rho, rho vx, rho vy, rho vz. 
         END DO !i
       END DO !j

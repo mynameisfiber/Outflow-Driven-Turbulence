@@ -26,7 +26,7 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=30, ghost=3
+integer, parameter :: procs = 8, n=30, ghost=4, seed=4352
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.6
 integer, parameter :: MAXTIME = 42840.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime = 5.75 hours
 real, parameter :: MAXVEL = 75.0
@@ -40,13 +40,18 @@ real, DIMENSION(n,n,n,4) :: u
 integer, DIMENSION(3) :: offset, coords, isedge
 integer :: node, globaln,tmp=0
 integer :: ierr, COMM_CART
-character*64 :: randfile = "random.txt", returnmsg = ""
+character*64 :: returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
 integer :: nstep=1, numinject = 0
 REAL, PARAMETER :: oImp=9012.6,oSnorm=2.91e-5*n**3*procs,odinj=0.05,osoft=0.0
 INTEGER, PARAMETER :: or = 8
+call srand(seed)
 
 !Check that variables make sense
+IF (ghost .LT. or / 2) THEN
+  returnmsg = "Ghostzones must be at least half the outflow radius"
+  GOTO 666
+END IF
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
   returnmsg = "# Procs must be a perfect cube"
   GOTO 666
@@ -79,11 +84,6 @@ print*,"node=",node,"(x,y,z) = ",coords
 
 !Initialize the analysis module
 call analysis_init(30,20,oImp**(4.0/7.0)*(oSnorm/n**3.0)**(3.0/7.0),node)
-
-!Now we open the random number file and set it to IO unit 1
-! note: read mode is default
-OPEN(UNIT=1, FILE=randfile)
-
 
 !Initialization
 CALL setup(u,n)
@@ -161,7 +161,6 @@ if (node .eq. 0) then
   PRINT*,"Efficency: ", 100*cputime/(procs*tcputime), "%"
 end if
 call MPI_FINALIZE(ierr)
-CLOSE(1)
 STOP
 
 
@@ -173,19 +172,19 @@ CONTAINS
     REAL :: dt, ci=0.0,cj=0.0,ck=0.0
 
     events = 0
-    DO WHILE( myrand() .LE. exp(-1.0*dt/oSnorm)*(dt/oSnorm)**events/factorial(events) .AND. &
+    DO WHILE( rand() .LE. exp(-1.0*dt/oSnorm)*(dt/oSnorm)**events/factorial(events) .AND. &
   	(MAXINJECT .EQ. 0 .OR. numinject .LT. MAXINJECT))
     
       !Find coordinates of the outflow
-      oi = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
-      oj = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
-      ok = ANINT(myrand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
+      oi = ANINT(rand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
+      oj = ANINT(rand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
+      ok = ANINT(rand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
       
-      !Create random orientation.  We still poll myrand() even if softangle==0
+      !Create random orientation.  We still poll rand() even if softangle==0
       ! to keep the random number file sync'd for different runs.
-      ci = myrand()*2-1
-      cj = myrand()*2-1
-      ck = myrand()*2-1
+      ci = rand()*2-1
+      cj = rand()*2-1
+      ck = rand()*2-1
     
       if (node .eq. 0) print*,"  Creating outflow at: ",oi,oj,ok
       !Now we check if the outflow occures in the local grid.  This is done by
@@ -605,16 +604,17 @@ CONTAINS
     return
   END FUNCTION factorial
 
-  REAL FUNCTION myrand()
-    INTEGER :: stat
-    READ(1,"(F12.10)", IOSTAT=stat) myrand
-    IF (stat .ne. 0) THEN
-      PRINT*,"An error occured while reading the random file:"
-      IF (stat .lt. 0) PRINT*,"  End of file"
-      IF (stat .gt. 0) PRINT*,"  Undetermined"
-      STOP
-    END IF
-    return
-  END FUNCTION myrand
+  ! DEPRICATED
+  ! REAL FUNCTION rand()
+  !   INTEGER :: stat
+  !   READ(1,"(F12.10)", IOSTAT=stat) rand
+  !   IF (stat .ne. 0) THEN
+  !     PRINT*,"An error occured while reading the random file:"
+  !     IF (stat .lt. 0) PRINT*,"  End of file"
+  !     IF (stat .gt. 0) PRINT*,"  Undetermined"
+  !     STOP
+  !   END IF
+  !   return
+  ! END FUNCTION rand
     
 end

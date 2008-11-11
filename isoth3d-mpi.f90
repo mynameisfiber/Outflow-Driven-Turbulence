@@ -26,13 +26,13 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=30, ghost=4, seed=4352
+integer, parameter :: procs = 8, n=120, ghost=6, seed=4352
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.6
-integer, parameter :: MAXTIME = 42840.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime = 5.75 hours
+integer, parameter :: MAXTIME = 21600.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime =6hr 
 real, parameter :: MAXVEL = 75.0
-integer, parameter :: outputfreq=100
+integer, parameter :: outputfreq=250
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
-REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/10, 1.0/2 /) * 1, lastsavet = 0
+REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 0.0/2 /) * 15, lastsavet = 0
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 REAL :: dt, t
@@ -42,14 +42,14 @@ integer :: node, globaln,tmp=0
 integer :: ierr, COMM_CART
 character*64 :: returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
-integer :: nstep=1, numinject = 0
-REAL, PARAMETER :: oImp=9012.6,oSnorm=2.91e-5*n**3*procs,odinj=0.05,osoft=0.0
-INTEGER, PARAMETER :: or = 8
-call srand(seed)
+integer :: nstep=1, numinject = 0, newinject=0
+REAL, PARAMETER :: oImp=8364.76470116,oSnorm0=.00001,odinj=0.05,osoft=0.0
+REAL, PARAMETER :: on = 0
+INTEGER, PARAMETER :: or = 6
 
 !Check that variables make sense
-IF (ghost .LT. or / 2) THEN
-  returnmsg = "Ghostzones must be at least half the outflow radius"
+IF (ghost .LT. or) THEN
+  returnmsg = "Ghostzones must be at least the outflow radius"
   GOTO 666
 END IF
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
@@ -81,9 +81,10 @@ call MPI_CART_COORDS(COMM_CART,node,3,offset,ierr)
 coords = offset * n
 isedge = INT(2*coords/(globaln-n)-1)
 print*,"node=",node,"(x,y,z) = ",coords
+call srand(seed+node)
 
 !Initialize the analysis module
-call analysis_init(30,20,oImp**(4.0/7.0)*(oSnorm/n**3.0)**(3.0/7.0),node)
+call analysis_init(30,20,oImp**(4.0/7.0)*(oSnorm0)**(3.0/7.0),node)
 
 !Initialization
 CALL setup(u,n)
@@ -95,7 +96,11 @@ do while (TRIM(returnmsg) .eq. "")
   if (node .eq. 0) print*,"Starting nstep=",nstep,"t=",t
   
   !Manage outflows
-  CALL outflow_manager(u,n,dt,numinject)
+  CALL outflow_manager(u,n,dt,newinject)
+  CALL MPI_Allreduce ( newinject, newinject, 1, &
+                     MPI_INTEGER, MPI_SUM, COMM_CART, ierr)
+  numinject = numinject + newinject
+  newinject = 0
   
   !Now test out the boundry conditions
   call boundary(u,n,ghost)
@@ -161,46 +166,46 @@ if (node .eq. 0) then
   PRINT*,"Efficency: ", 100*cputime/(procs*tcputime), "%"
 end if
 call MPI_FINALIZE(ierr)
-STOP
+call EXIT(0)
 
 
 CONTAINS
 
-  SUBROUTINE outflow_manager(u,n,dt,numinject)
-    INTEGER :: n, oi,oj,ok, numinject, events
+  SUBROUTINE outflow_manager(u,n,dt,newinject)
+    INTEGER :: n, oi,oj,ok, newinject, events, i,j,k
     REAL, DIMENSION(n,n,n,4) :: u
-    REAL :: dt, ci=0.0,cj=0.0,ck=0.0
+    REAL :: dt, ci=0.0,cj=0.0,ck=0.0,p
+    
+    !print*,"Prob=",dt*oSnorm0*p**on
 
-    events = 0
-    DO WHILE( rand() .LE. exp(-1.0*dt/oSnorm)*(dt/oSnorm)**events/factorial(events) .AND. &
-  	(MAXINJECT .EQ. 0 .OR. numinject .LT. MAXINJECT))
-    
-      !Find coordinates of the outflow
-      oi = ANINT(rand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
-      oj = ANINT(rand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
-      ok = ANINT(rand()*(globaln-2*procs**(1/3.0)*ghost-1)+1)
+    !$OMP PARALLEL DO SCHEDULE(STATIC) &
+    !$OMP shared(u,numinject,newinject,n,dt) &
+    !$OMP PRIVATE(i,j,k,oi,oj,ok,ci,cj,ck,events,p) DEFAULT(none)
+    DO k=ghost+1,n-ghost
+      DO j=ghost+1,n-ghost
+        DO i=ghost+1,n-ghost
+          p = u(i,j,k,1)
+          events = 0
+!exp(-1.0*dt/(oSnorm0*p**on))*(dt/(oSnorm0*p**on))**events/factorial(events)
+          IF (rand() .LE. dt*oSnorm0*p**on .AND. (MAXINJECT .EQ. 0 .OR. newinject+numinject .LT. MAXINJECT)) THEN
+
+            !Find coordinates of the outflow
+            oi = ANINT(rand()*(n-2*ghost-1)+ghost+1)
+            oj = ANINT(rand()*(n-2*ghost-1)+ghost+1)
+            ok = ANINT(rand()*(n-2*ghost-1)+ghost+1)
       
-      !Create random orientation.  We still poll rand() even if softangle==0
-      ! to keep the random number file sync'd for different runs.
-      ci = rand()*2-1
-      cj = rand()*2-1
-      ck = rand()*2-1
-    
-      if (node .eq. 0) print*,"  Creating outflow at: ",oi,oj,ok
-      !Now we check if the outflow occures in the local grid.  This is done by
-      !   finding the components of the distance at the closest approach and 
-      !   seeing if any component is larger than the local grid width
-      !NOTE: we could do a more direct checking my finding the distance at 
-      !   closest approach to avoid false-positive however it would add 
-      !   computational time.
-      IF (MAXVAL(MIN(ABS(coords-(/oi,oj,ok/)-2*offset*ghost+n/2.0), &
-          ABS(coords-((/oi,oj,ok/)-2*offset*ghost+isedge*globaln)+n/2.0)))-or &
-          .LT. n/2) THEN
-        CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
-      END IF
-      
-      events = events + 1
-      numinject = numinject + 1
+            !Create random orientation.  We still poll rand() even if softangle==0
+            ! to keep the random number file sync'd for different runs.
+            ci = rand()*2-1
+            cj = rand()*2-1
+            ck = rand()*2-1
+
+            CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
+            events = events + 1
+            newinject = newinject + 1
+          END IF
+        END DO
+      END DO
     END DO
   END SUBROUTINE outflow_manager
 
@@ -217,29 +222,30 @@ CONTAINS
     V = (4.0 * PI / 3.0) * or**3
     collen = (ci**2 + cj**2 + ck**2)**.5
     colnorm = .05
-    vmax = oImp**(4.0/7.0)*(oSnorm/n**3.0)**(3.0/7.0) * MAXVEL
-    
-    !First we normalize to coordinates to the grid as to wrap any
-    !   outflows around the periodic grid
-    oi = oi-coords(1)+2*ghost*offset(1)
-    oj = oj-coords(2)+2*ghost*offset(2)
-    ok = ok-coords(3)+2*ghost*offset(3)
-    
-    if (oi .lt. -1*or) then
-      oi = oi + (globaln-2*procs**(1/3.0)*ghost)
-    else if (oi .gt. n+or) then
-      oi = oi - (globaln-2*procs**(1/3.0)*ghost)
-    end if
-    if (oj .lt. -1*or) then
-      oj = oj + (globaln-2*procs**(1/3.0)*ghost)
-    else if (oj .gt. n+or) then
-      oj = oj - (globaln-2*procs**(1/3.0)*ghost)
-    end if
-    if (ok .lt. -1*or) then
-      ok = ok + (globaln-2*procs**(1/3.0)*ghost)
-    else if (ok .gt. n+or) then
-      ok = ok - (globaln-2*procs**(1/3.0)*ghost)
-    end if
+    vmax = oImp**(4.0/7.0)*(oSnorm0*u(oi,oj,ok,1)**on)**(3.0/7.0) * MAXVEL
+
+    ! DEPRICATED 
+    ! !First we normalize to coordinates to the grid as to wrap any
+    ! !   outflows around the periodic grid
+    ! oi = oi-coords(1)+2*ghost*offset(1)
+    ! oj = oj-coords(2)+2*ghost*offset(2)
+    ! ok = ok-coords(3)+2*ghost*offset(3)
+    ! 
+    ! if (oi .lt. -1*or) then
+    !   oi = oi + (globaln-2*procs**(1/3.0)*ghost)
+    ! else if (oi .gt. n+or) then
+    !   oi = oi - (globaln-2*procs**(1/3.0)*ghost)
+    ! end if
+    ! if (oj .lt. -1*or) then
+    !   oj = oj + (globaln-2*procs**(1/3.0)*ghost)
+    ! else if (oj .gt. n+or) then
+    !   oj = oj - (globaln-2*procs**(1/3.0)*ghost)
+    ! end if
+    ! if (ok .lt. -1*or) then
+    !   ok = ok + (globaln-2*procs**(1/3.0)*ghost)
+    ! else if (ok .gt. n+or) then
+    !   ok = ok - (globaln-2*procs**(1/3.0)*ghost)
+    ! end if
     
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
     !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n,offset,vmax) &
@@ -249,32 +255,26 @@ CONTAINS
         DO i=oi-or,oi+or
           r = ((i-oi)**2 + (j-oj)**2 + (k-ok)**2)**.5
           IF (r .LE. or .AND. r .NE. 0) THEN
-          
-            !Now we check if the given coordinate is inside this grid
-            IF (MAXVAL((/i,j,k/)) .LE. n-ghost+1 .AND. &
-                MINVAL((/i,j,k/)) .GE. ghost-1) THEN
-          
-              !Take care of collimation
-              IF (osoft .GT. 0) THEN
-                mu = ACOS( DOT_PRODUCT((/ i-oi,j-oj,k-ok /),(/ ci,cj,ck /)) &
-                     / (r*collen) ) * 2.0 / PI - 1
-                P = colnorm / (1 + osoft**2 - mu**2)
-                PRINT*,"COLLIMATED!",osoft,mu,(/ci,cj,ck/)
-              ELSE
-                P = 1.0
-              END IF
-              
-              !Mass injection
-              u(i,j,k,1) = u(i,j,k,1) + (or-r)*odinj
-              
-              !Inject correct momentum per unit volume
-              if (MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) .eq. vmax*u(i,j,k,1)) then
-                print*,"CAPPING INJECT VELOCITY"
-              END IF
-              u(i,j,k,2) = MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) * (i-oi)/r
-              u(i,j,k,3) = MIN(u(i,j,k,3) + P*oImp/V,vmax*u(i,j,k,1)) * (j-oj)/r
-              u(i,j,k,4) = MIN(u(i,j,k,4) + P*oImp/V,vmax*u(i,j,k,1)) * (k-ok)/r
+            !PRINT*,"DOING INJECTION @ ",i,j,k
+            !Take care of collimation
+            IF (osoft .GT. 0) THEN
+              mu = ACOS( DOT_PRODUCT((/ i-oi,j-oj,k-ok /),(/ ci,cj,ck /)) &
+                   / (r*collen) ) * 2.0 / PI - 1
+              P = colnorm / (1 + osoft**2 - mu**2)
+            ELSE
+              P = 1.0
             END IF
+            
+            !Mass injection
+            u(i,j,k,1) = u(i,j,k,1) + (or-r)*odinj
+            
+            !Inject correct momentum per unit volume
+            if (MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) .eq. vmax*u(i,j,k,1)) then
+              print*,"CAPPING INJECT VELOCITY"
+            END IF
+            u(i,j,k,2) = MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) * (i-oi)/r
+            u(i,j,k,3) = MIN(u(i,j,k,3) + P*oImp/V,vmax*u(i,j,k,1)) * (j-oj)/r
+            u(i,j,k,4) = MIN(u(i,j,k,4) + P*oImp/V,vmax*u(i,j,k,1)) * (k-ok)/r
           END IF
         END DO
       END DO
@@ -536,7 +536,7 @@ CONTAINS
     800 format('output-slice-',I8.8,'-',I3.3)
     OPEN(UNIT=2, FILE=TRIM(filename))
     print*,"Writing to: ",filename,"@ nstep=",nstep
-    k = INT(n/2)
+    i = INT(n/2)
     DO k = ghost+1,n-ghost
       DO j = ghost+1,n-ghost
           write(2,870) u(i,j,k,1) , u(i,j,k,2),  u(i,j,k,3), u(i,j,k,4); 

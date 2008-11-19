@@ -2,7 +2,7 @@ CC=mpif90
 RUN=mpirun
 
 isoth3d-mpi:
-	${CC} -g -pg -ffast-math -O3 -fopenmp -o isoth3d-mpi analysis.f90 isoth3d-mpi.f90 
+	${CC} -pg -ffast-math -O3 -fopenmp -o isoth3d-mpi analysis.f90 isoth3d-mpi.f90 
 
 isoth3d:
 	gfortran -O3 -g -pg -fopenmp -o isoth3d isoth3d.f90 

@@ -1,11 +1,36 @@
 MODULE analysis
   IMPLICIT NONE
   
-  INTEGER, PRIVATE :: binsv, numbins, node
-  REAL, PRIVATE :: charv
-  REAL, DIMENSION(:), ALLOCATABLE, PRIVATE :: sigma, sigmavx
+  INTEGER :: binsv, numbins, node
+  REAL :: charv, meanrho, kinetic, compressional
+  REAL, DIMENSION(:), ALLOCATABLE :: sigma, sigmavx
   
   CONTAINS
+  
+  SUBROUTINE analysis_general(u,n,ghost,t,dt,nstep,S0,on,doanalysis)
+    INTEGER :: n, ghost, nstep, i,j,k
+    REAL, DIMENSION(n,n,n,4) :: u
+    REAL :: dt, S0, on, t
+    LOGICAL :: doanalysis
+    
+    if (doanalysis) call analysis_calc_init(u,n,ghost)
+    
+    do k=ghost+1,n-ghost
+      do j=ghost+1,n-ghost
+        do i=ghost+1,n-ghost
+          
+          if (doanalysis) call analysis_calc_cell(u(i,j,k,:))
+          
+          IF (rand() .LE. dt*S0*u(i,j,k,1)**on) THEN
+          
+          END IF
+          
+        end do
+      end do
+    end do
+    
+  if (doanalysis) call analysis_calc_end(n,t,nstep)
+  END SUBROUTINE analysis_general
   
   SUBROUTINE analysis_init(inumbins,ibinsv,icharv,inode)
     INTEGER :: inumbins, ibinsv, inode, pos
@@ -20,6 +45,73 @@ MODULE analysis
   
   END SUBROUTINE analysis_init
   
+  SUBROUTINE analysis_final()
+    DEALLOCATE(sigma)
+    DEALLOCATE(sigmavx)
+  END SUBROUTINE analysis_final
+  
+  SUBROUTINE analysis_calc_init(u,n,ghost)
+    INTEGER :: k, n, ghost
+    REAL, DIMENSION(n,n,n,4) :: u
+    
+    !Get some values ready for the main calculations
+    sigma = 0
+    sigmavx = 0
+    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n) PRIVATE(meanrho,k) 
+    !$OMP+DEFAULT(none) REDUCTION(+:meanrho)
+    do k=ghost+1,n-ghost
+      meanrho = SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
+    end do
+    meanrho = meanrho / (n*n*n)
+  END SUBROUTINE analysis_calc_init
+  
+  SUBROUTINE analysis_calc_cell(u)
+    REAL, DIMENSION(4) :: u
+    REAL :: meanmom
+    INTEGER :: pos
+    
+    meanmom = (u(2)**2 + u(3)**2 + u(4)**2)**(.5)
+  
+    !Calculate kinetic energy
+    kinetic = kinetic + .5 * meanmom**2 / u(1)
+        
+    !Calculate compressional energy
+    compressional = compressional + u(1)*log(u(1)/meanrho)
+    
+    !Update sigma
+    pos = INT(meanmom / (charv * u(1)) * binsv)+1
+    IF (pos .LT. numbins*binsv .AND. pos .GT. 0) THEN
+      sigma(pos) = sigma(pos) + u(1)
+    ELSE IF (pos .GT. 0) THEN
+      pos = numbins*binsv
+      sigma(pos) = sigma(pos) + u(1)
+    END IF
+    
+    !update sigmavx
+    pos = INT(u(2) / (charv * u(1)) * binsv + charv*binsv)+1
+    IF (pos .LT. 2*numbins*binsv .AND. pos .GT. 0) THEN
+      sigmavx(pos) = sigmavx(pos) + u(1)
+    ELSE IF (pos .GT. 0) THEN
+      pos = 2*numbins*binsv
+      sigmavx(pos) = sigmavx(pos) + u(1)
+    END IF
+  END SUBROUTINE analysis_calc_cell
+
+  
+  SUBROUTINE analysis_calc_end(n,t,nstep)
+    INTEGER :: n, nstep
+    REAL :: t
+    
+    kinetic = kinetic / (n*n*n)
+    compressional = compressional / (n*n*n)
+    sigma = sigma
+  
+    call outputone("kinetic",-1,kinetic,t,nstep)
+    call outputone("compress",-1,compressional,t,nstep)
+    call outputn(numbins*binsv,"sigma",nstep,sigma,t,nstep)
+    call outputn(2*numbins*binsv,"sigmavx",nstep,sigmavx,t,nstep)
+  END SUBROUTINE analysis_calc_end
+  
   SUBROUTINE analysis_calc(u,n,ghost,t,nstep)
     INTEGER :: n, ghost, k,j,i, nstep, pos
     REAL :: t, kinetic=0, compressional=0, meanrho=0, meanmom = 0
@@ -30,7 +122,13 @@ MODULE analysis
     !First we get some values ready for the main calculations
     sigma = 0
     sigmavx = 0
-    meanrho = SUM(u(:,:,:,1))/(n*n*n)
+    ! meanrho = SUM(u(:,:,:,1))/(n*n*n)
+    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n) PRIVATE(meanrho,k) 
+    !$OMP+DEFAULT(none) REDUCTION(+:meanrho)
+    do k=ghost+1,n-ghost
+      meanrho = SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
+    end do
+    meanrho = meanrho / (n*n*n)
     
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
     !$OMP shared(u,n,ghost,kinetic,compressional,sigma,sigmavx,charv,binsv,numbins,meanrho) &

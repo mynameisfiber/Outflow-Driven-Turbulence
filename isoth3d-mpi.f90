@@ -26,19 +26,20 @@ include "omp_lib.h"
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=120, ghost=6, seed=4352
+integer, parameter :: procs = 8, n=50, ghost=3, seed=4352
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.6
 integer, parameter :: MAXTIME = 21600.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime =6hr 
 real, parameter :: MAXVEL = 75.0
-integer, parameter :: outputfreq=250
+integer, parameter :: outputfreq=1
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
 REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 0.0/2 /) * 15, lastsavet = 0
+LOGICAL :: doanalysis = .false.
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
 REAL :: dt, t
 real, DIMENSION(n,n,n,4) :: u
 integer, DIMENSION(3) :: offset, coords, isedge
-integer :: node, globaln,tmp=0
+integer :: globaln, tmp=0
 integer :: ierr, COMM_CART
 character*64 :: returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
@@ -48,10 +49,6 @@ REAL, PARAMETER :: on = 0
 INTEGER, PARAMETER :: or = 6
 
 !Check that variables make sense
-IF (ghost .LT. or) THEN
-  returnmsg = "Ghostzones must be at least the outflow radius"
-  GOTO 666
-END IF
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
   returnmsg = "# Procs must be a perfect cube"
   GOTO 666
@@ -95,8 +92,8 @@ call MPI_BARRIER(MPI_COMM_WORLD,ierr)
 do while (TRIM(returnmsg) .eq. "")
   if (node .eq. 0) print*,"Starting nstep=",nstep,"t=",t
   
-  !Manage outflows
-  CALL outflow_manager(u,n,dt,newinject)
+  !Analyse grid and do outflows
+  CALL gridanalysis(u,n,dt,t,newinject)
   CALL MPI_Allreduce ( newinject, newinject, 1, &
                      MPI_INTEGER, MPI_SUM, COMM_CART, ierr)
   numinject = numinject + newinject
@@ -136,7 +133,8 @@ do while (TRIM(returnmsg) .eq. "")
   
   if ((SNAPSHOTFREQNSTEP(1).NE.0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP(1)).EQ.0) &
   .OR. (SNAPSHOTFREQT(1) .NE. 0 .AND. t .GE. SNAPSHOTFREQT(1) + lastsavet(1))) THEN
-      call analysis_calc(u,n,ghost,t,nstep)
+      !call analysis_calc(u,n,ghost,t,nstep)
+      doanalysis = .true.
       lastsavet(1) = t
   END IF
   
@@ -165,29 +163,36 @@ if (node .eq. 0) then
   PRINT*,"Total runtime: ", tcputime
   PRINT*,"Efficency: ", 100*cputime/(procs*tcputime), "%"
 end if
+call analysis_final()
 call MPI_FINALIZE(ierr)
 call EXIT(0)
 
 
 CONTAINS
 
-  SUBROUTINE outflow_manager(u,n,dt,newinject)
-    INTEGER :: n, oi,oj,ok, newinject, events, i,j,k
+  SUBROUTINE gridanalysis(u,n,dt,t,newinject)
+    INTEGER :: n, oi,oj,ok, newinject, i,j,k !,events
+    INTEGER :: sendto, lastsend=0, ti,tj,tk
+    REAL, DIMENSION(6) :: sendrecv
+    INTEGER stat(MPI_STATUS_SIZE)
     REAL, DIMENSION(n,n,n,4) :: u
-    REAL :: dt, ci=0.0,cj=0.0,ck=0.0,p
+    REAL :: dt, ci=0.0,cj=0.0,ck=0.0,t
     
-    !print*,"Prob=",dt*oSnorm0*p**on
+    if (doanalysis) call analysis_calc_init(u,n,ghost)
 
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(u,numinject,newinject,n,dt) &
-    !$OMP PRIVATE(i,j,k,oi,oj,ok,ci,cj,ck,events,p) DEFAULT(none)
+    !$OMP shared(u,numinject,newinject,n,dt,doanalysis,MPI_STATUS_IGNORE,offset,coords,lastsend,comm_cart) &
+    !$OMP PRIVATE(i,j,k,oi,oj,ok,ci,cj,ck,ierr,sendto,sendrecv,stat) DEFAULT(none)
     DO k=ghost+1,n-ghost
       DO j=ghost+1,n-ghost
         DO i=ghost+1,n-ghost
-          p = u(i,j,k,1)
-          events = 0
+        
+          if (doanalysis) call analysis_calc_cell(u(i,j,k,:))
+          
+          !events = 0
 !exp(-1.0*dt/(oSnorm0*p**on))*(dt/(oSnorm0*p**on))**events/factorial(events)
-          IF (rand() .LE. dt*oSnorm0*p**on .AND. (MAXINJECT .EQ. 0 .OR. newinject+numinject .LT. MAXINJECT)) THEN
+          IF (rand() .LE. dt*oSnorm0*(u(i,j,k,1)**on) .AND. &
+          (MAXINJECT .EQ. 0 .OR. newinject+numinject .LT. MAXINJECT)) THEN
 
             !Find coordinates of the outflow
             oi = ANINT(rand()*(n-2*ghost-1)+ghost+1)
@@ -201,13 +206,77 @@ CONTAINS
             ck = rand()*2-1
 
             CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
-            events = events + 1
+            !events = events + 1
             newinject = newinject + 1
-          END IF
+            
+            !Now we check if the outflow is near an edge and 
+            ! send it to the correct node:
+            do tk=-1,1
+              do tj=-1,1
+                do ti=-1,1
+                  if (maxval((/oi,oj,ok/)+(/ti,tj,tk/)*or) .GT. n-ghost .OR. &
+                      minval((/oi,oj,ok/)+(/ti,tj,tk/)*or) .LE. ghost) THEN
+                    !$OMP CRITICAL
+                      
+                    !wait for last send to complete
+                    PRINT*,"WE GOT A LIVE ONE!",lastsend
+                    if (lastsend .ne. 0) call MPI_WAIT(lastsend,MPI_STATUS_IGNORE,ierr)
+                    !find out who needs the information
+                    call MPI_Cart_rank (COMM_CART, offset+(/ti,tj,tk/), sendto, ierr)
+                    PRINT*,"SEND OUTFLOW TO ",sendto
+                    !send
+                    sendrecv = (/ REAL(oi+coords(1)),REAL(oj+coords(2)),REAL(ok+coords(2)),&
+                                ci,cj,ck/)
+                    call MPI_ISEND(sendrecv,3,MPI_REAL,sendto,6,COMM_CART,lastsend,ierr)
+                    
+                    !$OMP END CRITICAL
+                  end if
+                end do
+              end do
+            end do
+          end if
+          
+          !check the message buffer and take care of any outstanding outflows
+          if (MODULO(k,10) .eq. 0) call blind_outflow_recv(newinject)
+
         END DO
       END DO
     END DO
-  END SUBROUTINE outflow_manager
+    
+    call MPI_BARRIER(COMM_CART)
+    call blind_outflow_recv(newinject)
+    
+  if (doanalysis) call analysis_calc_end(n,t,nstep)
+  doanalysis = .false.
+  END SUBROUTINE gridanalysis
+  
+  SUBROUTINE blind_outflow_recv(inject)
+    INTEGER :: inject, oi,oj,ok
+    REAL :: ci,cj,ck
+    LOGICAL :: ismessage = .false.
+    REAL, DIMENSION(6) :: sendrecv
+    
+    !$OMP CRITICAL
+      1337 continue !hacked up do-while loop
+      call MPI_IPROBE(MPI_ANY_SOURCE,6,COMM_CART,ismessage,MPI_STATUS_IGNORE,ierr)
+      IF (ismessage .eqv. .true.) THEN
+        print*,"Recieved"
+        call MPI_RECV(sendrecv,6,MPI_REAL,MPI_ANY_SOURCE,6,COMM_CART,MPI_STATUS_IGNORE,ierr)
+        sendrecv = sendrecv - (/coords(1),coords(2),coords(3),0,0,0/)
+        oi = INT(sendrecv(1))
+        oj = INT(sendrecv(2))
+        ok = INT(sendrecv(3))
+        ci = sendrecv(4)
+        cj = sendrecv(5)
+        ck = sendrecv(6)
+        
+        CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
+        newinject = newinject + 1
+        GOTO 1337
+      END IF
+    !$OMP END CRITICAL
+  end subroutine blind_outflow_recv
+    
 
   SUBROUTINE generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
     !The following variables are defined:
@@ -254,7 +323,8 @@ CONTAINS
       DO j=oj-or,oj+or
         DO i=oi-or,oi+or
           r = ((i-oi)**2 + (j-oj)**2 + (k-ok)**2)**.5
-          IF (r .LE. or .AND. r .NE. 0) THEN
+          IF (r .LE. or .AND. r .NE. 0 .AND. minval((/i,j,k/)) .GT. 0 &
+              .AND. maxval((/i,j,k/)) .LE. n) THEN
             !PRINT*,"DOING INJECTION @ ",i,j,k
             !Take care of collimation
             IF (osoft .GT. 0) THEN

@@ -5,6 +5,12 @@ implicit none
 include "mpif.h"
 include "omp_lib.h"
 
+type olist
+    type(olist), pointer :: next
+    real, dimension(3) :: orient
+    integer, dimension(3) :: coords
+end type olist
+
 ! Variable Definitions:
 !     procs - number of processes
 !     n - length of local node
@@ -174,14 +180,19 @@ CONTAINS
     INTEGER :: n, oi,oj,ok, newinject, i,j,k !,events
     INTEGER :: sendto, lastsend=0, ti,tj,tk
     REAL, DIMENSION(6) :: sendrecv
+    LOGICAL :: finished = .false.
     INTEGER stat(MPI_STATUS_SIZE)
     REAL, DIMENSION(n,n,n,4) :: u
     REAL :: dt, ci=0.0,cj=0.0,ck=0.0,t
+    type(olist), pointer :: ll, cur,lst
+    
+    allocate(ll)
+    cur => ll
     
     if (doanalysis) call analysis_calc_init(u,n,ghost)
 
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(u,numinject,newinject,n,dt,doanalysis,MPI_STATUS_IGNORE,offset,coords,lastsend,comm_cart) &
+    !$OMP shared(u,numinject,newinject,n,dt,doanalysis,MPI_STATUS_IGNORE,offset,coords,lastsend,comm_cart,cur) &
     !$OMP PRIVATE(i,j,k,oi,oj,ok,ci,cj,ck,ierr,sendto,sendrecv,stat) DEFAULT(none)
     DO k=ghost+1,n-ghost
       DO j=ghost+1,n-ghost
@@ -205,9 +216,18 @@ CONTAINS
             cj = rand()*2-1
             ck = rand()*2-1
 
-            CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
-            !events = events + 1
-            newinject = newinject + 1
+            !$OMP CRITICAL
+            !create linked list of outflows
+            PRINT*,"Outflow found at ",(/oi,oj,ok/)
+            cur%orient = (/ci,cj,ck/)
+            cur%coords = (/oi,oj,ok/)
+            allocate(cur%next)
+            cur => cur%next
+            !$OMP END CRITICAL
+            
+            ! CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
+            !             !events = events + 1
+            !             newinject = newinject + 1
             
             !Now we check if the outflow is near an edge and 
             ! send it to the correct node:
@@ -237,41 +257,63 @@ CONTAINS
           end if
           
           !check the message buffer and take care of any outstanding outflows
-          if (MODULO(k,10) .eq. 0) call blind_outflow_recv(newinject)
+          if (MODULO(k,10) .eq. 0) call blind_outflow_recv(cur,n,newinject)
 
         END DO
       END DO
     END DO
     
-    call MPI_BARRIER(COMM_CART)
-    call blind_outflow_recv(newinject)
+    
+    lst => cur
+    cur => ll
+    do while (associated(cur%next))
+      PRINT*,"Injecting at ", cur%coords
+      CALL generate_outflow(u,n,cur%coords(1),cur%coords(2),cur%coords(3),&
+          cur%orient(1),cur%orient(2),cur%orient(3))
+      newinject = newinject + 1
+      call blind_outflow_recv(lst,n,newinject)
+      cur => cur%next
+      deallocate(ll)
+      ll => cur
+    end do
+    
+    ! call MPE_IBARRIER(COMM_CART,lastsend,ierr)
+    ! do while (finished .eqv. .false.)
+    !   call blind_outflow_recv(newinject)
+    !   call MPI_TEST(lastsend,finished,MPI_STATUS_IGNORE,ierr)
+    ! end do
     
   if (doanalysis) call analysis_calc_end(n,t,nstep)
   doanalysis = .false.
+  finished = .false.
   END SUBROUTINE gridanalysis
   
-  SUBROUTINE blind_outflow_recv(inject)
-    INTEGER :: inject, oi,oj,ok
+  SUBROUTINE blind_outflow_recv(cur,n,inject)
+    INTEGER :: inject, oi,oj,ok, n
     REAL :: ci,cj,ck
     LOGICAL :: ismessage = .false.
     REAL, DIMENSION(6) :: sendrecv
+    type(olist), pointer :: cur
     
     !$OMP CRITICAL
       1337 continue !hacked up do-while loop
       call MPI_IPROBE(MPI_ANY_SOURCE,6,COMM_CART,ismessage,MPI_STATUS_IGNORE,ierr)
       IF (ismessage .eqv. .true.) THEN
-        print*,"Recieved"
         call MPI_RECV(sendrecv,6,MPI_REAL,MPI_ANY_SOURCE,6,COMM_CART,MPI_STATUS_IGNORE,ierr)
-        sendrecv = sendrecv - (/coords(1),coords(2),coords(3),0,0,0/)
-        oi = INT(sendrecv(1))
-        oj = INT(sendrecv(2))
-        ok = INT(sendrecv(3))
+        oi = INT(sendrecv(1) - coords(1))
+        oj = INT(sendrecv(2) - coords(2))
+        ok = INT(sendrecv(3) - coords(3))
         ci = sendrecv(4)
         cj = sendrecv(5)
         ck = sendrecv(6)
+        print*,"Recieved coordinate ",(/oi,oj,ok/)
         
-        CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
-        newinject = newinject + 1
+        
+        cur%orient = (/ci,cj,ck/)
+        cur%coords = (/oi,oj,ok/)
+        allocate(cur%next)
+        cur => cur%next
+        
         GOTO 1337
       END IF
     !$OMP END CRITICAL

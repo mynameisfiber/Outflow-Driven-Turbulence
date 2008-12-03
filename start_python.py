@@ -2,7 +2,7 @@
 
 import numpy, pylab as py,sys, os
 NNODES = 8
-SIZE = 44
+SIZE = 24
 GSIZE = SIZE*NNODES**(1.0/3)
 timesslice = numpy.transpose([[float(i) for i in x.strip().split()] for x in file("output-times-slice").readlines()])
 timesslice = dict([(timesslice[1][i],timesslice[0][i]) for i in range(len(timesslice[0]))])

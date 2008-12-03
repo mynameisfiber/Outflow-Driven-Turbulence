@@ -9,6 +9,7 @@ type olist
     type(olist), pointer :: next
     real, dimension(3) :: orient
     integer, dimension(3) :: coords
+    logical :: filled = .False.
 end type olist
 
 ! Variable Definitions:
@@ -33,13 +34,13 @@ end type olist
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=50, ghost=3, seed=4352
+integer, parameter :: procs = 8, n=30, ghost=3, seed=4352
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.6
 integer, parameter :: MAXTIME = 21600.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime =6hr 
 real, parameter :: MAXVEL = 75.0
 integer, parameter :: outputfreq=1
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
-REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 0.0/2 /) * 15, lastsavet = 0
+REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 1.0 /) * 15.0, lastsavet = 0
 LOGICAL :: doanalysis = .false.
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
@@ -179,13 +180,13 @@ CONTAINS
 
   SUBROUTINE gridanalysis(u,n,dt,t,newinject)
     INTEGER :: n, oi,oj,ok, newinject, i,j,k !,events
-    INTEGER :: sendto, lastsend=0, ti,tj,tk
+    INTEGER :: sendto, lastsend=0, ti,tj,tk, si,sj,sk
     REAL, DIMENSION(6) :: sendrecv
     LOGICAL :: finished = .false.
     INTEGER stat(MPI_STATUS_SIZE)
     REAL, DIMENSION(n,n,n,4) :: u
     REAL :: dt, ci=0.0,cj=0.0,ck=0.0,t
-    type(olist), pointer :: ll, cur,lst
+    type(olist), pointer :: ll, cur,lst,cln
     INTEGER :: numdone = 0
     
     allocate(ll)
@@ -195,8 +196,8 @@ CONTAINS
 
     numdone = 0
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(u,numinject,n,dt,doanalysis,MPI_STATUS_IGNORE,offset,coords,lastsend,comm_cart,cur,numdone) &
-    !$OMP PRIVATE(i,j,k,oi,oj,ok,ci,cj,ck,ierr,sendto,sendrecv,stat) DEFAULT(none)
+    !$OMP shared(u,numinject,n,dt,doanalysis,MPI_STATUS_IGNORE,offset,lastsend,comm_cart,cur,numdone,newinject) &
+    !$OMP PRIVATE(i,j,k,oi,oj,ok,ci,cj,ck,ierr,sendto,sendrecv,stat,si,sj,sk) DEFAULT(none)
     DO k=ghost+1,n-ghost
       DO j=ghost+1,n-ghost
         DO i=ghost+1,n-ghost
@@ -221,12 +222,14 @@ CONTAINS
 
             !$OMP CRITICAL
             !create linked list of outflows
-            PRINT*,"Outflow found at ",(/oi,oj,ok/)
             cur%orient = (/ci,cj,ck/)
             cur%coords = (/oi,oj,ok/)
+            cur%filled = .True.
             allocate(cur%next)
             cur => cur%next
+            cur%next => NULL() 
             !$OMP END CRITICAL
+            newinject = newinject + 1
             
             ! CALL generate_outflow(u,n,oi,oj,ok,ci,cj,ck)
             !             !events = events + 1
@@ -237,22 +240,25 @@ CONTAINS
             do tk=-1,1
               do tj=-1,1
                 do ti=-1,1
-                  if (maxval((/oi,oj,ok/)+(/ti,tj,tk/)*or) .GT. n-ghost .OR. &
-                      minval((/oi,oj,ok/)+(/ti,tj,tk/)*or) .LE. ghost) THEN
+                  if (( ti .eq. 0 .OR. oi+ti*or .GT. n-ghost .OR. oi+ti*or .LE. ghost) .AND. &
+                      ( tj .eq. 0 .OR. oj+tj*or .GT. n-ghost .OR. oj+tj*or .LE. ghost) .AND. &
+                      ( tk .eq. 0 .OR. ok+tk*or .GT. n-ghost .OR. ok+tk*or .LE. ghost) .AND. &
+                      (any((/ti,tj,tk/) .ne. 0 )) ) THEN
                     !$OMP CRITICAL
-                      
-                    !wait for last send to complete
-                    PRINT*,"WE GOT A LIVE ONE!",lastsend
                     !find out who needs the information
                     call MPI_Cart_rank (COMM_CART, offset+(/ti,tj,tk/), sendto, ierr)
                     !Wait for the send buffer to clear
                     if (lastsend .ne. 0) call MPI_WAIT(lastsend,MPI_STATUS_IGNORE,ierr)
                     !normalize the coordinates for the reciving grid
-                    sendrecv = (/ REAL(abs(oi-n-2*ghost)),REAL(abs(oj-n-2*ghost)),&
-                                REAL(abs(ok-n-2*ghost)),ci,cj,ck/)
-                    PRINT*," SENING OUTFLOW COORDS",sendrecv," TO ",sendto
+                    si = n - 2*ghost + ti*oi + 1
+                    sj = n - 2*ghost + tj*oj + 1
+                    sk = n - 2*ghost + tk*ok + 1
+                    if (ti .eq. 0) si = oi
+                    if (tj .eq. 0) sj = oj
+                    if (tk .eq. 0) sk = ok
+                    sendrecv = (/ REAL(si),REAL(sj),REAL(sk),ci,cj,ck/)
                     !Send
-                    call MPI_ISEND(sendrecv,3,MPI_REAL,sendto,6,COMM_CART,lastsend,ierr)
+                    call MPI_ISEND(sendrecv,6,MPI_REAL,sendto,6,COMM_CART,lastsend,ierr)
                     
                     !$OMP END CRITICAL
                   end if
@@ -269,52 +275,40 @@ CONTAINS
     END DO
     
     !Inform neighboors we are done
-    PRINT*,node," is done injecting!"
     do tk=-1,1
       do tj=-1,1
         do ti=-1,1
-          if ( ALL((/ti,tj,tk/) .ne. 0) ) THEN
+          if ( any((/ti,tj,tk/) .ne. 0 ) ) THEN
+            if (lastsend .ne. 0) call MPI_WAIT(lastsend,MPI_STATUS_IGNORE,ierr)
             call MPI_Cart_rank (COMM_CART, offset+(/ti,tj,tk/), sendto, ierr)
-            call MPI_ISEND((/-1,-1,-1,-1,-1,-1/),3,MPI_REAL,sendto,6,COMM_CART,lastsend,ierr)
+            call MPI_ISEND((/-1.0,-1.0,-1.0,-1.0,-1.0,-1.0/),6,MPI_REAL,sendto,6,COMM_CART,lastsend,ierr)
           END IF
         END DO
       END DO
     END DO
     
     lst => cur
+    ! cur => ll
+    ! do while (associated(cur%next) .and. cur%filled .eqv. .True.)
+    !   print*,node,"==",cur%coords,"=="
+    !   cur=>cur%next
+    ! end do
     cur => ll
-    do while (numdone .ne. 26)
-      if (associated(cur%next)) then
-        print*,"1"
+    do while (numdone .lt. 26)
+      if (associated(cur%next) .and. cur%filled .eqv. .True.) then
         !inject current outflow
-        PRINT*,node,"Injecting at ", cur%coords
+        PRINT*,node,"Injecting at ", cur%coords, cur%orient
         CALL generate_outflow(u,n,cur%coords(1),cur%coords(2),cur%coords(3),&
             cur%orient(1),cur%orient(2),cur%orient(3))
-        newinject = newinject + 1
-        print*,"2"
-        !check for duplicates
-        do while (associated(cur%next) .and. all(cur%coords .eq. cur%next%coords))
-          ll => cur%next
-          cur => cur%next%next
-          deallocate(ll)
-          ll => cur
-        end do
-        print*,"3"
         !move on to next outflow
         cur => cur%next
         deallocate(ll)
         ll => cur
       ELSE
-        PRINT*,node,"idle ibarrier!"
+        continue
       END IF
       call blind_outflow_recv(lst,n,numdone)
     end do
-    
-    ! call MPE_IBARRIER(COMM_CART,lastsend,ierr)
-    ! do while (finished .eqv. .false.)
-    !   call blind_outflow_recv(newinject)
-    !   call MPI_TEST(lastsend,finished,MPI_STATUS_IGNORE,ierr)
-    ! end do
     
   if (doanalysis) call analysis_calc_end(n,t,nstep)
   doanalysis = .false.
@@ -325,32 +319,34 @@ CONTAINS
     INTEGER :: oi,oj,ok, n, ndone
     REAL :: ci,cj,ck
     LOGICAL :: ismessage = .false.
-    REAL, DIMENSION(6) :: sendrecv
+    REAL, DIMENSION(6) :: recv
+    INTEGER stat(MPI_STATUS_SIZE)
     type(olist), pointer :: cur
     
     !$OMP CRITICAL
       1337 continue !hacked up do-while loop
       call MPI_IPROBE(MPI_ANY_SOURCE,6,COMM_CART,ismessage,MPI_STATUS_IGNORE,ierr)
       IF (ismessage .eqv. .true.) THEN
-        call MPI_RECV(sendrecv,6,MPI_REAL,MPI_ANY_SOURCE,6,COMM_CART,MPI_STATUS_IGNORE,ierr)
+        call MPI_RECV(recv,6,MPI_REAL,MPI_ANY_SOURCE,6,COMM_CART,stat,ierr)!MPI_STATUS_IGNORE
         
-        IF ( ALL(sendrecv .eq. -1.0) ) THEN
+        IF ( ALL(recv .eq. -1.0) ) THEN
           ndone = ndone + 1
           GOTO 1337
         END IF
         
-        oi = INT(sendrecv(1))
-        oj = INT(sendrecv(2))
-        ok = INT(sendrecv(3))
-        ci = sendrecv(4)
-        cj = sendrecv(5)
-        ck = sendrecv(6)
-        print*,node,"Recieved coordinate ",(/oi,oj,ok/)
+        oi = INT(recv(1))
+        oj = INT(recv(2))
+        ok = INT(recv(3))
+        ci = recv(4)
+        cj = recv(5)
+        ck = recv(6)
         
         cur%orient = (/ci,cj,ck/)
         cur%coords = (/oi,oj,ok/)
+        cur%filled = .True.
         allocate(cur%next)
         cur => cur%next
+        cur%next => NULL()
         
         GOTO 1337
       END IF
@@ -372,31 +368,7 @@ CONTAINS
     collen = (ci**2 + cj**2 + ck**2)**.5
     colnorm = .05
     vmax = oImp**(4.0/7.0)*(oSnorm0*u(oi,oj,ok,1)**on)**(3.0/7.0) * MAXVEL
-
-    ! DEPRICATED 
-    ! !First we normalize to coordinates to the grid as to wrap any
-    ! !   outflows around the periodic grid
-    ! oi = oi-coords(1)+2*ghost*offset(1)
-    ! oj = oj-coords(2)+2*ghost*offset(2)
-    ! ok = ok-coords(3)+2*ghost*offset(3)
-    ! 
-    ! if (oi .lt. -1*or) then
-    !   oi = oi + (globaln-2*procs**(1/3.0)*ghost)
-    ! else if (oi .gt. n+or) then
-    !   oi = oi - (globaln-2*procs**(1/3.0)*ghost)
-    ! end if
-    ! if (oj .lt. -1*or) then
-    !   oj = oj + (globaln-2*procs**(1/3.0)*ghost)
-    ! else if (oj .gt. n+or) then
-    !   oj = oj - (globaln-2*procs**(1/3.0)*ghost)
-    ! end if
-    ! if (ok .lt. -1*or) then
-    !   ok = ok + (globaln-2*procs**(1/3.0)*ghost)
-    ! else if (ok .gt. n+or) then
-    !   ok = ok - (globaln-2*procs**(1/3.0)*ghost)
-    ! end if
     
-    PRINT*,node," injecting......"
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
     !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n,offset,vmax) &
     !$OMP PRIVATE(i,j,k,r,ni,nj,nk,P,mu) DEFAULT(none)
@@ -430,7 +402,6 @@ CONTAINS
         END DO
       END DO
     END DO
-    print*,node," done injecting"
     
   
   END SUBROUTINE generate_outflow

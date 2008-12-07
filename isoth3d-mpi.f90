@@ -34,11 +34,11 @@ end type olist
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=30, ghost=3, seed=4352
-REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.6
-integer, parameter :: MAXTIME = 21600.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime =6hr 
+integer, parameter :: procs = 8, n=86, ghost=3, seed=4352
+REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.4
+integer, parameter :: MAXTIME = 172770.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime ~48hr 
 real, parameter :: MAXVEL = 75.0
-integer, parameter :: outputfreq=1
+integer, parameter :: outputfreq=100
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
 REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 1.0 /) * 15.0, lastsavet = 0
 LOGICAL :: doanalysis = .false.
@@ -52,8 +52,8 @@ integer :: ierr, COMM_CART
 character*64 :: returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
 integer :: nstep=1, numinject = 0, newinject=0
-REAL, PARAMETER :: oImp=8364.76470116,oSnorm0=.00001,odinj=0.05,osoft=0.0
-REAL, PARAMETER :: on = 0
+REAL, PARAMETER :: oImp=9364.76470116,oSnorm0=.00001,odinj=0.05,osoft=0
+REAL, PARAMETER :: on = 0.0
 INTEGER, PARAMETER :: or = 6
 
 !Check that variables make sense
@@ -213,7 +213,7 @@ CONTAINS
             oi = ANINT(rand()*(n-2*ghost-1)+ghost+1)
             oj = ANINT(rand()*(n-2*ghost-1)+ghost+1)
             ok = ANINT(rand()*(n-2*ghost-1)+ghost+1)
-      
+            
             !Create random orientation.  We still poll rand() even if softangle==0
             ! to keep the random number file sync'd for different runs.
             ci = rand()*2-1
@@ -250,9 +250,9 @@ CONTAINS
                     !Wait for the send buffer to clear
                     if (lastsend .ne. 0) call MPI_WAIT(lastsend,MPI_STATUS_IGNORE,ierr)
                     !normalize the coordinates for the reciving grid
-                    si = n - 2*ghost + ti*oi + 1
-                    sj = n - 2*ghost + tj*oj + 1
-                    sk = n - 2*ghost + tk*ok + 1
+                    si = abs(n - 2*ghost - ti* oi)
+                    sj = abs(n - 2*ghost - tj* oj) 
+                    sk = abs(n - 2*ghost - tk* ok) 
                     if (ti .eq. 0) si = oi
                     if (tj .eq. 0) sj = oj
                     if (tk .eq. 0) sk = ok
@@ -268,7 +268,7 @@ CONTAINS
           end if
           
           !check the message buffer and take care of any outstanding outflows
-          if (MODULO(k,10) .eq. 0) call blind_outflow_recv(cur,n,numdone)
+          if (MODULO(k,500) .eq. 0) call blind_outflow_recv(cur,n,numdone)
 
         END DO
       END DO
@@ -279,6 +279,7 @@ CONTAINS
       do tj=-1,1
         do ti=-1,1
           if ( any((/ti,tj,tk/) .ne. 0 ) ) THEN
+            call blind_outflow_recv(cur,n,numdone)
             if (lastsend .ne. 0) call MPI_WAIT(lastsend,MPI_STATUS_IGNORE,ierr)
             call MPI_Cart_rank (COMM_CART, offset+(/ti,tj,tk/), sendto, ierr)
             call MPI_ISEND((/-1.0,-1.0,-1.0,-1.0,-1.0,-1.0/),6,MPI_REAL,sendto,6,COMM_CART,lastsend,ierr)
@@ -294,7 +295,7 @@ CONTAINS
     !   cur=>cur%next
     ! end do
     cur => ll
-    do while (numdone .lt. 26)
+    do while (numdone .ne. 30) !26 + extra time
       if (associated(cur%next) .and. cur%filled .eqv. .True.) then
         !inject current outflow
         PRINT*,node,"Injecting at ", cur%coords, cur%orient
@@ -307,6 +308,7 @@ CONTAINS
       ELSE
         continue
       END IF
+      if (numdone .GE. 26) numdone = numdone + 1
       call blind_outflow_recv(lst,n,numdone)
     end do
     
@@ -325,6 +327,7 @@ CONTAINS
     
     !$OMP CRITICAL
       1337 continue !hacked up do-while loop
+      ismessage = .false.
       call MPI_IPROBE(MPI_ANY_SOURCE,6,COMM_CART,ismessage,MPI_STATUS_IGNORE,ierr)
       IF (ismessage .eqv. .true.) THEN
         call MPI_RECV(recv,6,MPI_REAL,MPI_ANY_SOURCE,6,COMM_CART,stat,ierr)!MPI_STATUS_IGNORE
@@ -392,9 +395,9 @@ CONTAINS
             u(i,j,k,1) = u(i,j,k,1) + (or-r)*odinj
             
             !Inject correct momentum per unit volume
-            if (MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) .eq. vmax*u(i,j,k,1)) then
-              print*,"CAPPING INJECT VELOCITY"
-            END IF
+            ! if (MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) .eq. vmax*u(i,j,k,1)) then
+            !   print*,"CAPPING INJECT VELOCITY"
+            ! END IF
             u(i,j,k,2) = MIN(u(i,j,k,2) + P*oImp/V,vmax*u(i,j,k,1)) * (i-oi)/r
             u(i,j,k,3) = MIN(u(i,j,k,3) + P*oImp/V,vmax*u(i,j,k,1)) * (j-oj)/r
             u(i,j,k,4) = MIN(u(i,j,k,4) + P*oImp/V,vmax*u(i,j,k,1)) * (k-ok)/r

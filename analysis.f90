@@ -57,8 +57,7 @@ MODULE analysis
     !Get some values ready for the main calculations
     sigma = 0
     sigmavx = 0
-    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n) PRIVATE(meanrho,k) 
-    !$OMP+DEFAULT(none) REDUCTION(+:meanrho)
+    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n,ghost) PRIVATE(k) DEFAULT(none) REDUCTION(+:meanrho)
     do k=ghost+1,n-ghost
       meanrho = SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
     end do
@@ -123,8 +122,7 @@ MODULE analysis
     sigma = 0
     sigmavx = 0
     ! meanrho = SUM(u(:,:,:,1))/(n*n*n)
-    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n) PRIVATE(meanrho,k) 
-    !$OMP+DEFAULT(none) REDUCTION(+:meanrho)
+    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n,ghost) PRIVATE(k) DEFAULT(none) REDUCTION(+:meanrho)
     do k=ghost+1,n-ghost
       meanrho = SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
     end do

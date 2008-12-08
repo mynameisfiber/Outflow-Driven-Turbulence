@@ -4,7 +4,7 @@
 # 
 
 for i in *; do
-	if [ -d "${i}"]; then
+	if [ -d "${i}" ]; then
 		echo -n "Processing '${i}'\t\t"
     mencoder "mf://${i}/*.png" -mf fps=5 -o ${i}.avi -ovc lavc -lavcopts vcodec=mpeg4 &> /dev/null && echo "[DONE]" || (echo "[ !! ]" && exit );
   fi

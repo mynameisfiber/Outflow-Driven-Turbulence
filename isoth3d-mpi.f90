@@ -21,7 +21,7 @@ end type olist
 !     ghost - number of ghost cells
 !     CFL - courant number
 !     outputfreq - frequency of stdout dumps
-!     snapshotfreqt - how many physical seconds to output (analysis, slice, snapshot)
+!     snapshotfreqt - fractions of a merging time to output (analysis, slice, snapshot)
 !     snapshotfreqnstep - how many steps to output (analysis, slice, snapshot)
 !     dims - # of nodes for each dimension
 !     u - test grid
@@ -40,7 +40,7 @@ integer, parameter :: MAXTIME = 172770.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime ~4
 real, parameter :: MAXVEL = 75.0
 integer, parameter :: outputfreq=100
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
-REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 1.0 /) * 15.0, lastsavet = 0
+REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 1.0 /), lastsavet = 0
 LOGICAL :: doanalysis = .false.
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims
@@ -94,11 +94,15 @@ call analysis_init(30,20,oImp**(4.0/7.0)*(oSnorm0)**(3.0/7.0),node)
 !Initialization
 CALL setup(u,n)
 CALL timestep(dt, u,n,CFL)
+snapshotfreqt = snapshotfreqt / ((oImp**(3.0)) * (oSnorm0**(4.0)))**(1.0/7.0)
 t=0.0;
 
 call MPI_BARRIER(MPI_COMM_WORLD,ierr)
 do while (TRIM(returnmsg) .eq. "")
   if (node .eq. 0) print*,"Starting nstep=",nstep,"t=",t
+  
+  !Do the boundry conditions
+  call boundary(u,n,ghost)
   
   !Analyse grid and do outflows
   CALL gridanalysis(u,n,dt,t,newinject)
@@ -106,9 +110,6 @@ do while (TRIM(returnmsg) .eq. "")
                      MPI_INTEGER, MPI_SUM, COMM_CART, ierr)
   numinject = numinject + newinject
   newinject = 0
-  
-  !Now test out the boundry conditions
-  call boundary(u,n,ghost)
 
   !Calculate timestep
   CALL timestep(dt, u,n,CFL)

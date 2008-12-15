@@ -1,5 +1,6 @@
 program gridcontrol
 
+use physicalparams
 use analysis
 implicit none
 include "mpif.h"
@@ -17,6 +18,7 @@ end type olist
 !     n - length of local node
 !     MAXVEL - maximum v_char to inject
 !     MAXINJECT - soft maximum outflow restriction... only implemented at the BEGINNING of a timestep.
+!     MAXTIME - max number of merging times to go
 !     globaln - length of global grid
 !     ghost - number of ghost cells
 !     CFL - courant number
@@ -34,11 +36,11 @@ end type olist
 !     or - radius of outflow
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
-integer, parameter :: procs = 8, n=86, ghost=3, seed=4352
+!     colnorm - normalization for outflow
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.4
-integer, parameter :: MAXTIME = 172770.0, MAXSTEPS = 0, MAXINJECT=0  !maxtime ~48hr 
+integer, parameter :: MAXWALLTIME = 21570.0, MAXTIME = 20, MAXINJECT=0  !maxtime ~6hr 
 real, parameter :: MAXVEL = 75.0
-integer, parameter :: outputfreq=100
+integer, parameter :: outputfreq=250
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
 REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 1.0 /), lastsavet = 0
 LOGICAL :: doanalysis = .false.
@@ -52,9 +54,6 @@ integer :: ierr, COMM_CART
 character*64 :: returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
 integer :: nstep=1, numinject = 0, newinject=0
-REAL, PARAMETER :: oImp=9364.76470116,oSnorm0=.00001,odinj=0.05,osoft=0
-REAL, PARAMETER :: on = 0.0
-INTEGER, PARAMETER :: or = 6
 
 !Check that variables make sense
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
@@ -151,9 +150,9 @@ do while (TRIM(returnmsg) .eq. "")
       CALL output_stdout(nstep,cputime,numinject,t,dt,minval(u(:,:,:,1)))
 
   !Check if it's time to leave
-  IF (MAXTIME .NE. 0 .AND. MAXTIME .LE. cputime) THEN 
+  IF (MAXWALLTIME .NE. 0 .AND. MAXWALLTIME .LE. cputime) THEN 
     returnmsg = "System Time Limit"
-  ELSE IF (MAXSTEPS .NE. 0 .AND. MAXSTEPS .LE. nstep) THEN 
+  ELSE IF (MAXTIME .NE. 0 .AND. MAXTIME .LE. t/((oImp**(3.0))*(oSnorm0**(4.0)))**(1.0/7.0)) THEN 
     returnmsg = "Timestep Limit"
   ELSE IF (minval(u(:,:,:,1)) .LT. 0) THEN
     returnmsg = "Negative Density"
@@ -366,15 +365,14 @@ CONTAINS
     !     x - distance between arbitrary point and center of outflow
     INTEGER :: n,oi,oj,ok, i,j,k, ni,nj,nk
     REAL, DIMENSION(n,n,n,4) :: u
-    REAL :: r, ci,cj,ck, V, mu, collen, P, colnorm, vmax
+    REAL :: r, ci,cj,ck, V, mu, collen, P, vmax, cosphi
     
     V = (4.0 * PI / 3.0) * or**3
     collen = (ci**2 + cj**2 + ck**2)**.5
-    colnorm = .05
     vmax = oImp**(4.0/7.0)*(oSnorm0*u(oi,oj,ok,1)**on)**(3.0/7.0) * MAXVEL
     
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n,offset,vmax) &
+    !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n,offset,vmax,cosphi) &
     !$OMP PRIVATE(i,j,k,r,ni,nj,nk,P,mu) DEFAULT(none)
     DO k=ok-or,ok+or
       DO j=oj-or,oj+or
@@ -385,8 +383,16 @@ CONTAINS
             !PRINT*,"DOING INJECTION @ ",i,j,k
             !Take care of collimation
             IF (osoft .GT. 0) THEN
-              mu = ACOS( DOT_PRODUCT((/ i-oi,j-oj,k-ok /),(/ ci,cj,ck /)) &
-                   / (r*collen) ) * 2.0 / PI - 1
+              cosphi = DOT_PRODUCT((/ i-oi,j-oj,k-ok /),(/ ci,cj,ck /)) / (r*collen)
+    			    !if we are at the asymptote, move over the smallest discrete angle
+    			    IF (cosphi .ge. 1) THEN
+    			      print*,"+++",cosphi
+    			      cosphi = 1-atan(1.0/or)
+    			    ELSE IF (cosphi .le. -1) THEN 
+      			    print*,"---",cosphi
+      		      cosphi = atan(1.0/or) - 1
+    			    END IF
+              mu = ACOS(cosphi) * 2.0 / PI - 1
               P = colnorm / (1 + osoft**2 - mu**2)
             ELSE
               P = 1.0

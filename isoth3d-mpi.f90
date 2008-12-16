@@ -40,7 +40,7 @@ end type olist
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.4
 integer, parameter :: MAXWALLTIME = 21570.0, MAXTIME = 20, MAXINJECT=0  !maxtime ~6hr 
 real, parameter :: MAXVEL = 75.0
-integer, parameter :: outputfreq=250
+integer, parameter :: outputfreq=1
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
 REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 1.0 /), lastsavet = 0
 LOGICAL :: doanalysis = .false.
@@ -54,6 +54,7 @@ integer :: ierr, COMM_CART
 character*64 :: returnmsg = ""
 REAL(8) :: cputimeoffset, cputime, tcputime
 integer :: nstep=1, numinject = 0, newinject=0
+REAL :: colnorm = -1.0
 
 !Check that variables make sense
 IF (procs**(1.0/3) .ne. int(procs**(1.0/3))) THEN
@@ -152,7 +153,7 @@ do while (TRIM(returnmsg) .eq. "")
   !Check if it's time to leave
   IF (MAXWALLTIME .NE. 0 .AND. MAXWALLTIME .LE. cputime) THEN 
     returnmsg = "System Time Limit"
-  ELSE IF (MAXTIME .NE. 0 .AND. MAXTIME .LE. t/((oImp**(3.0))*(oSnorm0**(4.0)))**(1.0/7.0)) THEN 
+  ELSE IF (MAXTIME .NE. 0 .AND. MAXTIME .LE. t*((oImp**(3.0))*(oSnorm0**(4.0)))**(1.0/7.0)) THEN 
     returnmsg = "Timestep Limit"
   ELSE IF (minval(u(:,:,:,1)) .LT. 0) THEN
     returnmsg = "Negative Density"
@@ -371,6 +372,30 @@ CONTAINS
     collen = (ci**2 + cj**2 + ck**2)**.5
     vmax = oImp**(4.0/7.0)*(oSnorm0*u(oi,oj,ok,1)**on)**(3.0/7.0) * MAXVEL
     
+    IF (osoft .GT. 0 .AND. colnorm .eq. -1.0) THEN
+      colnorm = 0.0
+      DO k=ok-or,ok+or
+        DO j=oj-or,oj+or
+          DO i=oi-or,oi+or
+            r = ((i-oi)**2 + (j-oj)**2 + (k-ok)**2)**.5
+            IF (r .LE. or .AND. r .NE. 0) THEN
+              cosphi = DOT_PRODUCT((/ i-oi,j-oj,k-ok /),(/ ci,cj,ck /)) / (r*collen)
+              !if we are at the asymptote, move over the smallest discrete angle
+              IF (cosphi .ge. 1) THEN
+                cosphi = 1-atan(1.0/or)
+              ELSE IF (cosphi .le. -1) THEN 
+                cosphi = atan(1.0/or) - 1
+              END IF
+              mu = ACOS(cosphi) * 2.0 / PI - 1
+              colnorm = colnorm + 1/ (1 + osoft**2 - mu**2)
+            END IF
+          END DO
+        END DO
+      END DO
+      colnorm = V/colnorm
+      print*,"colnorm=",colnorm
+    END IF
+
     !$OMP PARALLEL DO SCHEDULE(STATIC) &
     !$OMP shared(globaln,oi,oj,ok,u,ci,cj,ck,V,collen,colnorm,coords,n,offset,vmax,cosphi) &
     !$OMP PRIVATE(i,j,k,r,ni,nj,nk,P,mu) DEFAULT(none)
@@ -386,11 +411,9 @@ CONTAINS
               cosphi = DOT_PRODUCT((/ i-oi,j-oj,k-ok /),(/ ci,cj,ck /)) / (r*collen)
     			    !if we are at the asymptote, move over the smallest discrete angle
     			    IF (cosphi .ge. 1) THEN
-    			      print*,"+++",cosphi
-    			      cosphi = 1-atan(1.0/or)
+    			      cosphi = 1-atan(1.0/r)
     			    ELSE IF (cosphi .le. -1) THEN 
-      			    print*,"---",cosphi
-      		      cosphi = atan(1.0/or) - 1
+      		      cosphi = atan(1.0/r) - 1
     			    END IF
               mu = ACOS(cosphi) * 2.0 / PI - 1
               P = colnorm / (1 + osoft**2 - mu**2)
@@ -413,7 +436,7 @@ CONTAINS
       END DO
     END DO
     
-  
+
   END SUBROUTINE generate_outflow
 
   SUBROUTINE boundary(u,n,ghost)

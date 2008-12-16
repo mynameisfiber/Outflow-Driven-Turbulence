@@ -23,15 +23,15 @@ def load_slice(i,dir,ovars):
     fd = file(dir+"output-slice-%.8d-%.3d"%(i,n))
     a, b,c,d = numpy.transpose([[float(num) for num in line.split()] for line in fd.readlines()])
 
-    a = a.reshape(ovars['gsize'],ovars['gsize'])
-    b = b.reshape(ovars['gsize'],ovars['gsize'])
-    c = c.reshape(ovars['gsize'],ovars['gsize'])
-    d = d.reshape(ovars['gsize'],ovars['gsize'])    
+    a = a.reshape(ovars['size'],ovars['size'])
+    b = b.reshape(ovars['size'],ovars['size'])
+    c = c.reshape(ovars['size'],ovars['size'])
+    d = d.reshape(ovars['size'],ovars['size'])    
     
-    rho[offset[0]*ovars['gsize']:(offset[0]+1)*ovars['gsize'],offset[1]*ovars['gsize']:(offset[1]+1)*ovars['gsize'],offset[2]] = a
-    rhovx[offset[0]*ovars['gsize']:(offset[0]+1)*ovars['gsize'],offset[1]*ovars['gsize']:(offset[1]+1)*ovars['gsize'],offset[2]] = b
-    rhovy[offset[0]*ovars['gsize']:(offset[0]+1)*ovars['gsize'],offset[1]*ovars['gsize']:(offset[1]+1)*ovars['gsize'],offset[2]] = c
-    rhovz[offset[0]*ovars['gsize']:(offset[0]+1)*ovars['gsize'],offset[1]*ovars['gsize']:(offset[1]+1)*ovars['gsize'],offset[2]] = d
+    rho[offset[0]*ovars['size']:(offset[0]+1)*ovars['size'],offset[1]*ovars['size']:(offset[1]+1)*ovars['size'],offset[2]] = a
+    rhovx[offset[0]*ovars['size']:(offset[0]+1)*ovars['size'],offset[1]*ovars['size']:(offset[1]+1)*ovars['size'],offset[2]] = b
+    rhovy[offset[0]*ovars['size']:(offset[0]+1)*ovars['size'],offset[1]*ovars['size']:(offset[1]+1)*ovars['size'],offset[2]] = c
+    rhovz[offset[0]*ovars['size']:(offset[0]+1)*ovars['size'],offset[1]*ovars['size']:(offset[1]+1)*ovars['size'],offset[2]] = d
           
     fd.close()
     
@@ -70,7 +70,7 @@ def loadparams(dir):
   ovars = {}
   try:
     for line in file(dir+"params.f90").readlines():
-      vars = re.search("(REAL|INTEGER), [\w]* :: ([\w]*)[ ]?=[ ]?([.0-9]*)", line)
+      vars = re.search("(REAL|INTEGER), [\w]* :: ([\w]*)[ ]?=[ ]?([.\-0-9e]*)", line)
       if vars is not None:
         if vars.group(1) == "REAL":
           ovars[vars.group(2)] = float(vars.group(3))
@@ -109,75 +109,75 @@ if __name__ == '__main__':
   timesanal = numpy.transpose([[float(i) for i in x.strip().split()] for x in file(dir+"output-times-kinetic").readlines()])
   timesanal = dict([(timesanal[1][i],timesanal[0][i]) for i in range(len(timesanal[0]))])
 
-  # print "Rendering %d Slices" % len(timesslice)
-  # files = timesslice.keys()
-  # files.sort()
-  # count = 1
-  # mkdir(dir+"rho0")
-  # mkdir(dir+"rho1")
-  # mkdir(dir+"rhovx0")
-  # mkdir(dir+"rhovx1")
-  # for t in files:
-  #   print "t = %d [%f%%]" % (t,count*100.0/len(timesslice)) + " "*10
-  #   rho,rhovx,rhovy,rhovz = load_slice(t,dir,ovars)
-  #   print "\rRendering and Saving" + " "*5 + "\r",
-  #   sys.stdout.flush()
-  # 
-  #   tnorm = timesslice[t]/ovars['tmerge']
-  #   
-  #   py.clf()
-  #   py.pcolor(rho[:,:,0])
-  #   py.axhline(ovars['gsize'])
-  #   py.axvline(ovars['gsize'])
-  #   py.title(r'$ \rho @ %f \cdot t_{merge} $' % tnorm)
-  #   py.colorbar()
-  #   py.savefig(dir+"rho0/analysis-rho0-%.8d.png"%t)
-  # 
-  #   py.clf()
-  #   py.pcolor(rho[:,:,1])
-  #   py.axhline(ovars['gsize'])
-  #   py.axvline(ovars['gsize'])
-  #   py.title(r'$ \rho @ %f \cdot t_{merge}$' % tnorm)
-  #   py.colorbar()
-  #   py.savefig(dir+"rho1/analysis-rho1-%.8d.png"%t)
-  # 
-  #   py.clf()
-  #   py.pcolor(rhovx[:,:,0])
-  #   py.axhline(ovars['gsize'])
-  #   py.axvline(ovars['gsize'])
-  #   py.title(r'$ \rho_x @ %f \cdot t_{merge}$' % tnorm)
-  #   py.colorbar()
-  #   py.savefig(dir+"rhovx0/analysis-rhovx0-%.8d.png"%t)
-  # 
-  #   py.clf()
-  #   py.pcolor(rhovx[:,:,1])
-  #   py.axhline(ovars['gsize'])
-  #   py.axvline(ovars['gsize'])
-  #   py.title(r'$ \rho_x @ %f \cdot t_{merge}$' % tnorm)
-  #   py.colorbar()
-  #   py.savefig(dir+"rhovx1/analysis-rhovx1-%.8d.png"%t)
-  # 
-  #   count += 1
-  # 
-  # print "Rendering %d Sigma" % len(timesanal) + " "*10
-  # files = timesanal.keys()
-  # files.sort()
-  # count = 1
-  # mkdir(dir+"sigma")
-  # for t in files:
-  #   print "t = %d [%f%%]" % (t,count*100.0/len(timesanal)) + " "*10
-  # 
-  #   tnorm = timesslice[t] / ovars['tmerge']
-  #   sigma = load_sigma(t,dir,ovars)
-  #   py.clf()
-  #   py.bar(range(200),numpy.nan_to_num(sigma)[:200])
-  #   py.axhline(1)
-  #   py.title(r'$ \rho(\|v\|) @ t=%f \cdot t_{merge} $' % tnorm)
-  #   py.xlabel(r'$ \frac{<\|v\|>}{v_{char}} $')
-  #   py.ylabel(r'$ <\rho>  $')
-  #   py.savefig(dir+"sigma/analysis-sigma-%.8d.png" % t)
-  # 
-  #   count += 1
+  print "Rendering %d Slices" % len(timesslice)
+  files = timesslice.keys()
+  files.sort()
+  count = 1
+  mkdir(dir+"rho0")
+  mkdir(dir+"rho1")
+  mkdir(dir+"rhovx0")
+  mkdir(dir+"rhovx1")
+  for t in files:
+    print "t = %d [%f%%]" % (t,count*100.0/len(timesslice)) + " "*10
+    rho,rhovx,rhovy,rhovz = load_slice(t,dir,ovars)
+    print "\rRendering and Saving" + " "*5 + "\r",
+    sys.stdout.flush()
+  
+    tnorm = timesslice[t]/ovars['tmerge']
+    
+    py.clf()
+    py.pcolor(rho[:,:,0])
+    py.axhline(ovars['gsize'])
+    py.axvline(ovars['gsize'])
+    py.title(r'$ \rho @ %f \cdot t_{merge} $' % tnorm)
+    py.colorbar()
+    py.savefig(dir+"rho0/analysis-rho0-%.8d.png"%t)
+  
+    py.clf()
+    py.pcolor(rho[:,:,1])
+    py.axhline(ovars['gsize'])
+    py.axvline(ovars['gsize'])
+    py.title(r'$ \rho @ %f \cdot t_{merge}$' % tnorm)
+    py.colorbar()
+    py.savefig(dir+"rho1/analysis-rho1-%.8d.png"%t)
+  
+    py.clf()
+    py.pcolor(rhovx[:,:,0])
+    py.axhline(ovars['gsize'])
+    py.axvline(ovars['gsize'])
+    py.title(r'$ \rho_x @ %f \cdot t_{merge}$' % tnorm)
+    py.colorbar()
+    py.savefig(dir+"rhovx0/analysis-rhovx0-%.8d.png"%t)
+  
+    py.clf()
+    py.pcolor(rhovx[:,:,1])
+    py.axhline(ovars['gsize'])
+    py.axvline(ovars['gsize'])
+    py.title(r'$ \rho_x @ %f \cdot t_{merge}$' % tnorm)
+    py.colorbar()
+    py.savefig(dir+"rhovx1/analysis-rhovx1-%.8d.png"%t)
+  
+    count += 1
+  
+  print "Rendering %d Sigma" % len(timesanal) + " "*10
+  files = timesanal.keys()
+  files.sort()
+  count = 1
+  mkdir(dir+"sigma")
+  for t in files:
+    print "t = %d [%f%%]" % (t,count*100.0/len(timesanal)) + " "*10
+  
+    tnorm = timesanal[int(t)] / ovars['tmerge']
+    sigma = load_sigma(t,dir,ovars)
+    py.clf()
+    py.bar(range(200),numpy.nan_to_num(sigma)[:200])
+    py.axhline(1)
+    py.title(r'$ \rho(\|v\|) @ t=%f \cdot t_{merge} $' % tnorm)
+    py.xlabel(r'$ \frac{<\|v\|>}{v_{char}} $')
+    py.ylabel(r'$ <\rho>  $')
+    py.savefig(dir+"sigma/analysis-sigma-%.8d.png" % t)
+  
+    count += 1
   
   
   print "Rendering Kinetic"
@@ -197,13 +197,12 @@ if __name__ == '__main__':
 
   mkdir(dir+"kinetic")
   py.clf()
-  py.scatter(atimes/ovars['tmerge'],kinetic,label="Simulation")
+  py.scatter(atimes/ovars['tmerge'],kinetic)
   py.axvline(1)
-  py.hlines(kinsat,1,atimes[-1]/ovars['tmerge'],label="Mean Saturation Energy")
+  py.hlines(kinsat,1,atimes[-1]/ovars['tmerge'])
   py.xlim(xmin=0)
   py.title("Mean kinetic energy")
   py.xlabel("time ($t_{merge}$)")
   py.ylabel("<Kinetic>")
-  py.legend()
   py.savefig(dir+"kinetic/analysis-kinetic.png")
   

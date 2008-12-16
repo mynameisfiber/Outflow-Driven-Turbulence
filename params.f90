@@ -10,8 +10,10 @@ MODULE physicalparams
   
   REAL, PARAMETER :: odinj=0.05
   REAL, PARAMETER :: osoft=0.1
-  REAL, PARAMETER :: colnorm=4.4918960E-04
   REAL, PARAMETER :: on = 0.0
   REAL, PARAMETER :: op = 1.0
   INTEGER, PARAMETER :: or = 6
+
+  ! -1 means calculate it durring run
+  !REAL :: colnorm=-1.0
 END MODULE physicalparams

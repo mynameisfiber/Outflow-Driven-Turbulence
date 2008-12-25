@@ -2,7 +2,7 @@ MODULE analysis
   IMPLICIT NONE
   
   INTEGER :: binsv, numbins, node
-  REAL :: charv, meanrho, kinetic, compressional
+  REAL :: charv, meanrho, totalrho, kinetic, compressional
   REAL, DIMENSION(:), ALLOCATABLE :: sigma, sigmavx
   
   CONTAINS
@@ -57,11 +57,11 @@ MODULE analysis
     !Get some values ready for the main calculations
     sigma = 0
     sigmavx = 0
-    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n,ghost) PRIVATE(k) DEFAULT(none) REDUCTION(+:meanrho)
+    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n,ghost) PRIVATE(k) DEFAULT(none) REDUCTION(+:totalrho)
     do k=ghost+1,n-ghost
-      meanrho = SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
+      totalrho = SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
     end do
-    meanrho = meanrho / (n*n*n)
+    meanrho = totalrho / (n*n*n)
   END SUBROUTINE analysis_calc_init
   
   SUBROUTINE analysis_calc_cell(u)
@@ -105,76 +105,12 @@ MODULE analysis
     compressional = compressional / (n*n*n)
     sigma = sigma
   
+    call outputone("totalrho",-1,totalrho,t,nstep)
     call outputone("kinetic",-1,kinetic,t,nstep)
     call outputone("compress",-1,compressional,t,nstep)
     call outputn(numbins*binsv,"sigma",nstep,sigma,t,nstep)
     call outputn(2*numbins*binsv,"sigmavx",nstep,sigmavx,t,nstep)
   END SUBROUTINE analysis_calc_end
-  
-  SUBROUTINE analysis_calc(u,n,ghost,t,nstep)
-    INTEGER :: n, ghost, k,j,i, nstep, pos
-    REAL :: t, kinetic=0, compressional=0, meanrho=0, meanmom = 0
-    REAL, DIMENSION(n,n,n,4) :: u
-    
-    !PRINT*,"Analyisis: node-",node,"nstep-",nstep,"t-",t
-  
-    !First we get some values ready for the main calculations
-    sigma = 0
-    sigmavx = 0
-    ! meanrho = SUM(u(:,:,:,1))/(n*n*n)
-    !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n,ghost) PRIVATE(k) DEFAULT(none) REDUCTION(+:meanrho)
-    do k=ghost+1,n-ghost
-      meanrho = SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
-    end do
-    meanrho = meanrho / (n*n*n)
-    
-    !$OMP PARALLEL DO SCHEDULE(STATIC) &
-    !$OMP shared(u,n,ghost,kinetic,compressional,sigma,sigmavx,charv,binsv,numbins,meanrho) &
-    !$OMP PRIVATE(i,j,k,pos,meanmom) DEFAULT(none)
-    do k=ghost+1,n-ghost
-      do j=ghost+1,n-ghost
-        do i=ghost+1,n-ghost
-        
-          meanmom = (u(i,j,k,2)**2 + u(i,j,k,3)**2 + u(i,j,k,4)**2)**(.5)
-        
-          !Calculate kinetic energy
-          kinetic = kinetic + .5 * meanmom**2 / u(i,j,k,1)
-              
-          !Calculate compressional energy
-          compressional = compressional + u(i,j,k,1)*log(u(i,j,k,1)/meanrho)
-          
-          !Update sigma
-          pos = INT(meanmom / (charv * u(i,j,k,1)) * binsv)+1
-          IF (pos .LT. numbins*binsv .AND. pos .GT. 0) THEN
-            sigma(pos) = sigma(pos) + u(i,j,k,1)
-          ELSE IF (pos .GT. 0) THEN
-            pos = numbins*binsv
-            sigma(pos) = sigma(pos) + u(i,j,k,1)
-          END IF
-          
-          !update sigmavx
-          pos = INT(u(i,j,k,2) / (charv * u(i,j,k,1)) * binsv + charv*binsv)+1
-          IF (pos .LT. 2*numbins*binsv .AND. pos .GT. 0) THEN
-            sigmavx(pos) = sigmavx(pos) + u(i,j,k,1)
-          ELSE IF (pos .GT. 0) THEN
-            pos = 2*numbins*binsv
-            sigmavx(pos) = sigmavx(pos) + u(i,j,k,1)
-          END IF
-          
-        end do
-      end do
-    end do
-    
-    kinetic = kinetic / (n*n*n)
-    compressional = compressional / (n*n*n)
-    sigma = sigma
-    
-    call outputone("kinetic",-1,kinetic,t,nstep)
-    call outputone("compress",-1,compressional,t,nstep)
-    call outputn(numbins*binsv,"sigma",nstep,sigma,t,nstep)
-    call outputn(2*numbins*binsv,"sigmavx",nstep,sigmavx,t,nstep)
-  
-  END SUBROUTINE analysis_calc
   
   SUBROUTINE outputone(fileprefix, filesuffix, value, t, nstep)
     CHARACTER*54 filename

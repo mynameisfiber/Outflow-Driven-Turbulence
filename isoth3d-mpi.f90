@@ -37,12 +37,11 @@ end type olist
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
 !     colnorm - normalization for outflow
-REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029,  CFL = 0.4
-integer, parameter :: MAXWALLTIME = 21570.0, MAXTIME = 20, MAXINJECT=0  !maxtime ~6hr 
+REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029
+integer, parameter :: MAXTIME = 20, MAXINJECT=0  !maxtime ~6hr 
 real, parameter :: MAXVEL = 75.0
-integer, parameter :: outputfreq=1
 INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
-REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 1.0 /), lastsavet = 0
+REAL, DIMENSION(3) :: lastsavet = 0
 LOGICAL :: doanalysis = .false.
 real, parameter :: sqrt2=sqrt(2.0)
 integer, DIMENSION(3) :: dims

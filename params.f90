@@ -14,6 +14,8 @@ MODULE physicalparams
   REAL, PARAMETER :: op = 1.0
   INTEGER, PARAMETER :: or = 6
 
-  ! -1 means calculate it durring run
-  !REAL :: colnorm=-1.0
+  REAL, PARAMETER :: CFL = 0.4
+  INTEGER, PARAMETER :: MAXWALLTIME = 21570.0
+  INTEGER, PARAMETER :: outputfreq=1
+  REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20, 1.0/15, 1.0 /)
 END MODULE physicalparams

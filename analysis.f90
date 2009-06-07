@@ -4,7 +4,8 @@ MODULE analysis
   INTEGER :: binsv, numbins, node
   REAL :: charv, meanrho, totalrho, kinetic, compressional
   REAL, DIMENSION(:), ALLOCATABLE :: sigma, sigmavx
-  
+  CHARACTER*256 :: aodir
+
   CONTAINS
   
   SUBROUTINE analysis_general(u,n,ghost,t,dt,nstep,S0,on,doanalysis)
@@ -29,13 +30,15 @@ MODULE analysis
       end do
     end do
     
-  if (doanalysis) call analysis_calc_end(n,t,nstep)
+  if (doanalysis) call analysis_calc_end(n,ghost,t,nstep)
   END SUBROUTINE analysis_general
   
-  SUBROUTINE analysis_init(inumbins,ibinsv,icharv,inode)
-    INTEGER :: inumbins, ibinsv, inode, pos
+  SUBROUTINE analysis_init(inumbins,ibinsv,icharv,inode,iaodir)
+    INTEGER :: inumbins, ibinsv, inode
     REAL :: icharv
+    CHARACTER(LEN=*) :: iaodir
     
+    aodir = iaodir
     node = inode
     numbins = inumbins
     binsv = ibinsv
@@ -57,11 +60,14 @@ MODULE analysis
     !Get some values ready for the main calculations
     sigma = 0
     sigmavx = 0
+    totalrho = 0
+    compressional = 0
+    kinetic = 0
     !$OMP PARALLEL DO SCHEDULE(STATIC) SHARED(u,n,ghost) PRIVATE(k) DEFAULT(none) REDUCTION(+:totalrho)
     do k=ghost+1,n-ghost
-      totalrho = SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
+      totalrho = totalrho + SUM(u(k,ghost+1:n-ghost,ghost+1:n-ghost,1))
     end do
-    meanrho = totalrho / (n*n*n)
+    meanrho = totalrho / (n + 2*ghost)**3
   END SUBROUTINE analysis_calc_init
   
   SUBROUTINE analysis_calc_cell(u)
@@ -97,12 +103,12 @@ MODULE analysis
   END SUBROUTINE analysis_calc_cell
 
   
-  SUBROUTINE analysis_calc_end(n,t,nstep)
-    INTEGER :: n, nstep
+  SUBROUTINE analysis_calc_end(n,ghost,t,nstep)
+    INTEGER :: n, nstep, ghost
     REAL :: t
     
-    kinetic = kinetic / (n*n*n)
-    compressional = compressional / (n*n*n)
+    kinetic = kinetic / (n+2*ghost)**3
+    compressional = compressional / (n+2*ghost)**3
     sigma = sigma
   
     call outputone("totalrho",-1,totalrho,t,nstep)
@@ -113,14 +119,14 @@ MODULE analysis
   END SUBROUTINE analysis_calc_end
   
   SUBROUTINE outputone(fileprefix, filesuffix, value, t, nstep)
-    CHARACTER*54 filename
+    CHARACTER*256 filename
     CHARACTER*(*) fileprefix
     INTEGER :: filesuffix, nstep
     REAL :: value, t
     
     if (node .eq. 0) then
-      WRITE(filename,800) TRIM(fileprefix)
-      800 format('output-times-',A)
+      WRITE(filename,800) TRIM(aodir), TRIM(fileprefix)
+      800 format(A,'output-times-',A)
       OPEN(UNIT=2, FILE=TRIM(filename), ACCESS='APPEND')
       WRITE(2,805) t,nstep
       805 FORMAT(E15.6,' ',I10.10)
@@ -128,12 +134,12 @@ MODULE analysis
     end if
     
     IF (filesuffix .eq. -1) THEN
-      WRITE(filename,810) TRIM(fileprefix), node
-      810 format('output-',A,'-',I3.3)
+      WRITE(filename,810) TRIM(aodir), TRIM(fileprefix), node
+      810 format(A,'output-',A,'-',I3.3)
       OPEN(UNIT=2,FILE=TRIM(filename),ACCESS='APPEND')
     ELSE
-      WRITE(filename,820) TRIM(fileprefix), filesuffix, node
-      820 format('output-',A,'-',I8.8,'-',I3.3)
+      WRITE(filename,820) TRIM(aodir), TRIM(fileprefix), filesuffix, node
+      820 format(A,'output-',A,'-',I8.8,'-',I3.3)
       OPEN(UNIT=2,FILE=TRIM(filename))
     END IF
     
@@ -143,15 +149,15 @@ MODULE analysis
   END SUBROUTINE outputone
   
   SUBROUTINE outputn(size, fileprefix, filesuffix, value, t, nstep)
-    CHARACTER*54 filename
+    CHARACTER*256 filename
     CHARACTER*(*) fileprefix
     INTEGER :: filesuffix, nstep, size, i
     REAL :: t
     REAL, DIMENSION(size) :: value
     
     if (node .eq. 0) then
-      WRITE(filename,900) TRIM(fileprefix)
-      900 format('output-times-',A)
+      WRITE(filename,900) TRIM(aodir), TRIM(fileprefix)
+      900 format(A,'output-times-',A)
       OPEN(UNIT=2, FILE=TRIM(filename), ACCESS='APPEND')
       WRITE(2,905) t,nstep
       905 FORMAT(E15.6,' ',I10.10)
@@ -159,12 +165,12 @@ MODULE analysis
     end if
     
     IF (filesuffix .eq. -1) THEN
-      WRITE(filename,910) TRIM(fileprefix), node
-      910 format('output-',A,'-',I3.3)
+      WRITE(filename,910) TRIM(aodir), TRIM(fileprefix), node
+      910 format(A,'output-',A,'-',I3.3)
       OPEN(UNIT=2,FILE=TRIM(filename),ACCESS='APPEND')
     ELSE
-      WRITE(filename,920) TRIM(fileprefix), filesuffix, node
-      920 format('output-',A,'-',I8.8,'-',I3.3)
+      WRITE(filename,920) TRIM(aodir), TRIM(fileprefix), filesuffix, node
+      920 format(A,'output-',A,'-',I8.8,'-',I3.3)
       OPEN(UNIT=2,FILE=TRIM(filename))
     END IF
     

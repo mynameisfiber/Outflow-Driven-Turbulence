@@ -3,7 +3,7 @@
 #PBS -q workq
 #PBS -r n
 #PBS -l walltime=48:00:00
-#PBS -N col0.05-400dx
+#PBS -N runA
 
 cd $PBS_O_WORKDIR
 
@@ -14,12 +14,12 @@ echo "creating directories"
 lamnodes | cut -f 2 | cut -d "." -f 1 > nodes
 foreach node (`lamnodes | cut -f 2 | cut -d "." -f 1`)
   echo "  $node"
-  mkdir -p /mnt/scratch/$node/mgorelick/
-  rm -rf /mnt/scratch/$node/mgorelick/*
+  ssh $node mkdir -p /mnt/node_scratch/mgorelick/
+  ssh $node rm -rf /mnt/node_scratch/mgorelick/*
 end
 
 echo "setting omp threads and compiling"
-set OMP_NUM_THREADS=8
+set OMP_NUM_THREADS=10
 make clean && make
 
 echo "Running"
@@ -29,7 +29,7 @@ echo "Recovering output"
 mkdir "$PBS_O_WORKDIR/output/"
 foreach node (`lamnodes | cut -f 2 | cut -d "." -f 1`)
   echo "  $node"
-  mv /mnt/scratch/$node/mgorelick/* $PBS_O_WORKDIR/output/
+  scp -r mgorelick@${node}:/mnt/node_scratch/mgorelick/* $PBS_O_WORKDIR/output/
 end
 
 echo "Done"

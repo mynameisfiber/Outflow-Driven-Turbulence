@@ -9,7 +9,7 @@ MODULE params
   CHARACTER(LEN=*), PARAMETER :: odir="/home/fiber/Programming/outflow/output/"
   !CHARACTER(LEN=*), PARAMETER :: odir="/mnt/node_scratch/mgorelick/"
 
-  LOGICAL, PARAMETER :: resume = .False.
+  CHARACTER(LEN=*), PARAMETER :: resume = "/home/fiber/Programming/outflow/output.resume/"
 
   ! I/S s.t. v=1.3M and l=20 and t=15.3
   !REAL, PARAMETER :: oImp=10400
@@ -41,5 +41,5 @@ MODULE params
   !REAL, DIMENSION(3) :: snapshotfreqt = (/ 0.0, 0.0, 0.0 /)
   !INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,2 /)
   REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/20.0, 1.0/20.0, 1.0 /)
-  INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
+  INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 2,2,2 /)
 END MODULE params

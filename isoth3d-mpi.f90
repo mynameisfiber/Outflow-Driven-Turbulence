@@ -77,24 +77,15 @@ coords = offset * n
 isedge = INT(2*coords/(globaln-n)-1)
 call srand(seed+node)
 
-!Create log file
-PRINT*,node,"starting logger @ ",TRIM(odir)
-WRITE(logfile,101) odir,node
-101 format(A,'nodelog-',I2.2)
-OPEN(UNIT=6, FILE=TRIM(logfile), ACCESS='APPEND')
-IF (resume) WRITE(6,*),"RESUMING FROM SAVED FILES"
-WRITE(6,*),"node=",node,"(x,y,z) = ",coords
-FLUSH(6)
-
 !Initialize the analysis module
 call analysis_init(30,20,oImp**(4.0/7.0)*(oSnorm0)**(3.0/7.0),node,odir)
 
 !Initialization
 tmerge = (op**(3.0/7.0)) / ((oImp**(3.0/7.0)) * (oSnorm0**(4.0/7.0)))
 snapshotfreqt = snapshotfreqt * tmerge
-IF (resume) THEN
-  CALL read_resume_file()
-  CALL read_resume_cube(u,n,ghost,nstep)
+IF (resume .ne. "") THEN
+  CALL read_resume_file(resume)
+  CALL read_resume_cube(u,n,ghost,nstep,resume)
   call boundary(u,n,ghost)
   lastsavet = t
   WRITE(6,*),"Resumed at t=",t," nstep=",nstep
@@ -102,6 +93,15 @@ ELSE
   CALL setup(u,n)
   t=0.0;
 END IF
+
+!Create log file
+PRINT*,node,"starting logger @ ",TRIM(odir)
+WRITE(logfile,101) odir,node
+101 format(A,'nodelog-',I2.2)
+OPEN(UNIT=6, FILE=TRIM(logfile), ACCESS='APPEND')
+IF (resume .ne. "") WRITE(6,*),"RESUMING FROM SAVED FILES"
+WRITE(6,*),"node=",node,"(x,y,z) = ",coords
+FLUSH(6)
 
 call MPI_BARRIER(MPI_COMM_WORLD,ierr)
 do while (TRIM(returnmsg) .eq. "")
@@ -746,7 +746,8 @@ CONTAINS
     800 format(A,'output-slice-',I8.8,'-',I3.3)
     i = INT(n/2)
     OPEN(UNIT=2, FILE=TRIM(filename),form='unformatted',access='direct', &
-         recl=sizeof(u(i,ghost+1:n-ghost,ghost+1:n-ghost,:)))
+          recl=((n-2*ghost)**2)*4*4)
+    !     recl=sizeof(u(i,ghost+1:n-ghost,ghost+1:n-ghost,:)))
     WRITE(6,*),"Writing to: ",filename,"@ nstep=",nstep
     WRITE(2,rec=1),u(i,ghost+1:n-ghost,ghost+1:n-ghost,:)
     CLOSE(2)
@@ -773,7 +774,8 @@ CONTAINS
     901 format(A,'output-cube-',I8.8,'-',I3.3)
     WRITE(6,*),"Writing to: ",filename,"@ nstep=",nstep
     OPEN(UNIT=2,FILE=TRIM(filename),form='unformatted',access='direct', &
-         recl=sizeof(u(ghost+1:n-ghost,ghost+1:n-ghost,ghost+1:n-ghost,:)))
+          recl=((n-2*ghost)**3)*4*4)
+    !     recl=sizeof(u(ghost+1:n-ghost,ghost+1:n-ghost,ghost+1:n-ghost,:)))
     WRITE(2,rec=1),u(ghost+1:n-ghost,ghost+1:n-ghost,ghost+1:n-ghost,:)
     CLOSE(2)
   END SUBROUTINE output_file_cube
@@ -786,33 +788,71 @@ CONTAINS
     OPEN(UNIT=99, FILE=trim(filename), ACTION="WRITE")
     
     WRITE(99,1002) t, nstep, numinject
-    1002 FORMAT(E15.6, I10.10, I10.10)
+    1002 FORMAT(E15.6, 2X, I10.10, 2X, I10.10)
 
     CLOSE(99)
   END SUBROUTINE create_resume_file
 
-  SUBROUTINE read_resume_file()
+  SUBROUTINE read_resume_file(resume)
+    CHARACTER(LEN=*) :: resume
     CHARACTER*256 filename
+    CHARACTER*256 command
 
-    WRITE(filename,1001) odir
+    !Get the resume parameters
+    WRITE(filename,1001) resume
     1001 format(A,"resume_data")
     OPEN(UNIT=99, FILE=trim(filename), ACTION="READ")
-    
-    READ(99,1012) t, nstep, numinject
-    1012 FORMAT(E15.6, I10.10, I10.10)
-
+    READ(99,1002) t, nstep, numinject
+    1002 FORMAT(E15.6, 2X, I10.10, 2X, I10.10)
     CLOSE(99)
+    
+    !Transfer over the files that should be resumed
+    WRITE(command, 1012) resume, node, odir
+    1012 format("/bin/cp '",A,"output-kinetic-",I3.3,"' '",A,"'")
+    call system(command)
+    WRITE(command, 1003) resume, node, odir
+    1003 format("/bin/cp '",A,"nodelog-",I2.2,"' '",A,"'")
+    call system(command)
+    WRITE(command, 1004) resume, node, odir
+    1004 format("/bin/cp '",A,"output-compress-",I3.3,"' '",A,"'")
+    call system(command)
+    WRITE(command, 1005) resume, node, odir
+    1005 format("/bin/cp '",A,"output-totalrho-",I3.3,"' '",A,"'")
+    call system(command)
+    
+    IF (node .eq. 0) THEN
+      WRITE(command, 1006) resume, odir
+      1006 format("/bin/cp '",A,"output-times-cube' '",A,"'")
+      call system(command)
+      WRITE(command, 1007) resume, odir
+      1007 format("/bin/cp '",A,"output-times-slice' '",A,"'")
+      call system(command)
+      WRITE(command, 1008) resume, odir
+      1008 format("/bin/cp '",A,"output-times-kinetic' '",A,"'")
+      call system(command)
+      WRITE(command, 1009) resume, odir
+      1009 format("/bin/cp '",A,"output-times-sigma' '",A,"'")
+      call system(command)
+      WRITE(command, 1010) resume, odir
+      1010 format("/bin/cp '",A,"output-times-sigmavx' '",A,"'")
+      call system(command)
+      WRITE(command, 1011) resume, odir
+      1011 format("/bin/cp '",A,"output-times-totalrho' '",A,"'")
+      call system(command)
+    END IF
   END SUBROUTINE read_resume_file
 
-  SUBROUTINE read_resume_cube(u,n,ghost,nstep)
+  SUBROUTINE read_resume_cube(u,n,ghost,nstep,resume)
     INTEGER :: n, nstep, ghost
     REAL, DIMENSION(n,n,n,4) :: u
     CHARACTER*256 filename
+    CHARACTER(LEN=*) :: resume
 
-    WRITE(filename,1021) odir,nstep, node
+    WRITE(filename,1021) resume,nstep, node
     1021 format(A,'output-cube-',I8.8,'-',I3.3)
     OPEN(UNIT=99, FILE=trim(filename), FORM='unformatted', ACCESS='direct', &
-         recl=sizeof(u(ghost+1:n-ghost,ghost+1:n-ghost,ghost+1:n-ghost,:)))
+          recl=((n-2*ghost)**3) * 4*4)
+    !     recl=sizeof(u(ghost+1:n-ghost,ghost+1:n-ghost,ghost+1:n-ghost,:)))
     READ(99,rec=1),u(ghost+1:n-ghost,ghost+1:n-ghost,ghost+1:n-ghost,:)
 
     CLOSE(2)

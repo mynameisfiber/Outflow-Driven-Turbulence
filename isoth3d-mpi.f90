@@ -341,6 +341,7 @@ CONTAINS
     numinject = numinject + newinject
 
     rhoaddtot = oImp / MAXVEL * newinject
+    if (doanalysis) rhoaddtot = rhoaddtot  + totalrho - op * (n-2*ghost)**3
     u(:,:,:,:) = u(:,:,:,:) * ((n-2*ghost)**3*procs*op / ((n-2*ghost)**3*procs*op + rhoaddtot))
     WRITE(6,*),"injfactor=",((n-2*ghost)**3*procs*op / ((n-2*ghost)**3*procs*op+rhoaddtot))
 

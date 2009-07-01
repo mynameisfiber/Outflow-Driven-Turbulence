@@ -177,6 +177,7 @@ do while (TRIM(returnmsg) .eq. "")
   if ((SNAPSHOTFREQNSTEP(3).NE.0 .AND. MOD(nstep, SNAPSHOTFREQNSTEP(3)).EQ.0) &
   .OR. (SNAPSHOTFREQT(3) .NE. 0 .AND. t .GE. SNAPSHOTFREQT(3) + lastsavet(3))) THEN
       call output_file_cube(u,n,t,nstep)
+      if (node .eq. 0) call create_resume_file()
       lastsavet(3) = t
   END IF
   
@@ -236,7 +237,7 @@ CONTAINS
     INTEGER :: n, newinject, numinject, i,j,k, idx, d, chk
     LOGICAL :: isinject 
     REAL, DIMENSION(n,n,n,4) :: u
-    REAL :: dt, ci=0.0,cj=0.0,ck=0.0,t, oi, oj, ok, rhoaddtot, maxv
+    REAL :: dt, ci=0.0,cj=0.0,ck=0.0,t, oi, oj, ok, totalmass, ltotalmass, rhoaddtot, maxv
     REAL, DIMENSION(7,bufsize) :: lflows
     REAL, DIMENSION(7,bufsize*procs) :: gflows
     INTEGER, DIMENSION(3) :: inj, inloc
@@ -247,13 +248,16 @@ CONTAINS
     lflows(:,:) = -1
     idx = 1 
     maxv = 0
+    ltotalmass = 0
     !$OMP PARALLEL DO SCHEDULE(DYNAMIC) &
-    !$OMP shared(u,numinject,n,dt,doanalysis,lflows,idx) &
+    !$OMP shared(u,numinject,n,dt,doanalysis,lflows,idx,ltotalmass) &
     !$OMP PRIVATE(i,j,k,oi,oj,ok,ci,cj,ck) DEFAULT(SHARED) &
     !$OMP REDUCTION(MAX:maxv)
     DO k=1+ghost,n-ghost
       DO j=1+ghost,n-ghost
         DO i=1+ghost,n-ghost
+          
+          ltotalmass = ltotalmass + u(i,j,k,1)
 
       !    !VVVVVVVVV------  THE NEXT SECTION FOR ACTIVE GRID ONLY  -----VVVVVVVVVVVV
       !    IF (min(i,j,k) .gt. ghost .AND. max(i,j,k) .LE. n-ghost) THEN
@@ -299,7 +303,6 @@ CONTAINS
     CALL MPI_ALLGATHER(lflows,bufsize*7,MPI_REAL,gflows,bufsize*7,MPI_REAL, &
                                 COMM_CART,ierr)
    
-    ! SHARED(u,node,comm_cart,offset,bufsize,procs,gflows,n,ghost,or) DEFAULT(NONE) &
     newinject = 0
     ! PARALLEL DO DEFAULT(SHARED) &
     ! PRIVATE(idx,d,isinject,inj,ierr,chk,inloc) &
@@ -341,10 +344,14 @@ CONTAINS
     numinject = numinject + newinject
 
     rhoaddtot = oImp / MAXVEL * newinject
-    if (doanalysis) rhoaddtot = rhoaddtot  + totalrho - op * (n-2*ghost)**3
-    u(:,:,:,:) = u(:,:,:,:) * ((n-2*ghost)**3*procs*op / ((n-2*ghost)**3*procs*op + rhoaddtot))
-    WRITE(6,*),"injfactor=",((n-2*ghost)**3*procs*op / ((n-2*ghost)**3*procs*op+rhoaddtot))
-
+    call MPI_Allreduce (ltotalmass, totalmass, 1, MPI_REAL, MPI_SUM, COMM_CART, ierr)
+    rhoaddtot = rhoaddtot + totalmass - op * procs * (n - 2*ghost)**3
+    u = u * ((n-2*ghost)**3*procs*op / ((n-2*ghost)**3*procs*op + rhoaddtot))
+    !WRITE(6,*)," totalmass = ",totalmass
+    !WRITE(6,*),"iteal mass = ",op * procs * (n - 2*ghost)**3
+    !WRITE(6,*),"inject mass= ",oImp / MAXVEL * newinject
+    !WRITE(6,*),"        dM = ",totalmass - op * procs * (n - 2*ghost)**3
+    !WRITE(6,*),"injfactor=",((n-2*ghost)**3*procs*op / ((n-2*ghost)**3*procs*op+rhoaddtot))
 
     if (doanalysis) call analysis_calc_end(n,ghost,t,nstep)
     doanalysis = .false.

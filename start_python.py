@@ -360,6 +360,13 @@ if __name__ == '__main__':
     atimes.sort()
     atimes = numpy.array(atimes)
     mass = load_mass(dir,ovars)
+    
+    try:
+      mergestep = cubetimes.values()
+      mergestep.sort()
+      mergestep = mergestep[0]
+    except Exception:
+      mergestep = 0
 
     mkdir(outdir+"mass")
     py.clf()
@@ -368,8 +375,18 @@ if __name__ == '__main__':
     py.xlim(xmin=0)
     py.xlabel("time ($t_{merge}$)")
     py.ylabel("Mass")
-    py.title("Total mass")
+    py.title("Total mass ($<M(t>>t_{merge})> = %.2f$)"%mass[mergestep:].mean())
     py.savefig(outdir+"mass/analysis-mass.png")
+    
+    massdeviation = numpy.abs(mass-ovars['op']*ovars['gsize']**3)
+    py.clf()
+    py.scatter(atimes/ovars['tmerge'],massdeviation)
+    py.axvline(1)
+    py.xlim(xmin=0)
+    py.xlabel("time ($t_{merge}$)")
+    py.ylabel("|dM(t)|")
+    py.title("Absolute deviation from ideal mass ($<|dM(t>>t_{merge})|>=%.2f$)"%massdeviation[mergestep:].mean())
+    py.savefig(outdir+"mass/analysis-massdeviation.png")
 
 
   if methods % 13 == 0:

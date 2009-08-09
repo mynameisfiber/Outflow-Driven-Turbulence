@@ -30,7 +30,6 @@ include "omp_lib.h"
 !     islocal - is true if a particular event is local to this node
 !     isedge - +1 for top edge, -1 for bottom edge
 REAL, PARAMETER :: PI = 3.1415926535897932384626433832795029
-integer, parameter :: MAXINJECT=0
 REAL, DIMENSION(3) :: lastsavet = 0
 LOGICAL :: doanalysis = .false.
 real, parameter :: sqrt2=sqrt(2.0)

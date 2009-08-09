@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env mayavi2
 
 """This script demonstrates how one can script MayaVi and use its
 contour related modules.  Notice the magic line at the top.
@@ -9,6 +9,7 @@ contour related modules.  Notice the magic line at the top.
 
 # Standard library imports
 from os.path import join, abspath
+from sys import argv
 import numpy
 
 # Enthought library imports
@@ -31,7 +32,7 @@ def contour(i,x):
     mayavi.new_scene()
 
     # Read in datacube
-    fd = open("output-cube-%.8d-%.3d"%(i,0))
+    fd = open("output/output-cube-%.8d-%.3d"%(i,0))
     rho, rhovx, rhovz, rhovy = numpy.fromfile(file=fd,dtype=numpy.float32).reshape((4,x,x,x))
     src = ArraySource(transpose_input_array=False)
     src.scalar_data = numpy.log10(rho).T.copy()
@@ -73,4 +74,5 @@ def contour(i,x):
 
 
 if __name__ == '__main__':
-    contour(1756,200)
+    print "i=%s ; n=%s"%(argv[2], argv[3])
+    contour(int(argv[2]),int(argv[3]))

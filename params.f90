@@ -1,7 +1,7 @@
 MODULE params
   REAL, PARAMETER :: CFL = 0.65
-  INTEGER, PARAMETER :: procs = 8
-  INTEGER, PARAMETER :: n=78
+  INTEGER, PARAMETER :: procs = 8 
+  INTEGER, PARAMETER :: n=106
   INTEGER, PARAMETER :: ghost=3
   INTEGER, PARAMETER :: seed=4212 !4224
   REAL, PARAMETER :: MAXVEL = 50.0
@@ -31,11 +31,12 @@ MODULE params
   REAL, PARAMETER :: op = 1.0
  
   INTEGER, PARAMETER :: MAXWALLTIME = 171900 !~48hr
-  INTEGER, PARAMETER :: MAXSTEP =0
+  INTEGER, PARAMETER :: MAXSTEP =10
   INTEGER, PARAMETER :: outputfreq=500
   INTEGER, PARAMETER :: MAXTIME = 1
   INTEGER, PARAMETER :: MAXINJECT=0
   
   REAL, DIMENSION(3) :: snapshotfreqt = (/ 1.0/40.0, 1.0/20.0, 1.0 /)
-  INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 0,0,0 /)
+  INTEGER, DIMENSION(3) :: snapshotfreqnstep = (/ 1,0,0 /)
+  LOGICAL, DIMENSION(5) :: analysisTodo = (/ .True., .True.,.False.,.False.,.False. /) !Kinetic, rho, compress, sigma, sigmavx
 END MODULE params
